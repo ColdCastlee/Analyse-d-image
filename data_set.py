@@ -1,0 +1,36 @@
+import os
+
+# 创建目录结构
+os.makedirs('data', exist_ok=True)
+
+# 写入CSV - 包含所有数据（gp5 + grp5）
+csv_content = """id,filename,coin_count,total_value
+0,10.jpg,9,3.13
+1,11.jpg,12,6.18
+2,12.jpg,16,8.83
+3,13.jpg,19,12.33
+4,14.jpg,28,15.69
+5,15.jpg,35,17.32
+6,16.jpg,48,18.69
+7,17.jpg,48,18.20
+8,0.jpeg,2,2.20
+9,1.jpeg,4,4.22
+10,2.jpeg,3,3.20
+11,3.jpeg,4,0.80
+12,4.jpeg,3,3.00
+13,5.jpeg,2,1.20
+14,6.jpeg,11,10.26
+15,7.jpeg,3,1.70
+16,8.jpg,6,4.15
+17,9.jpg,8,3.88
+18,18.jpg,8,2.01
+19,19.jpg,10,3.19
+20,20.jpg,12,4.17
+21,21.jpg,8,4.22
+22,22.jpg,12,6.19
+23,23.jpg,20,8.88
+24,24.jpg,26,10.05"""
+
+with open('data/ground_truth.csv', 'w', encoding='utf-8') as f:
+    f.write(csv_content)
+
