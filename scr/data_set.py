@@ -1,7 +1,7 @@
 import os
 
 # 创建目录结构
-os.makedirs('data', exist_ok=True)
+os.makedirs('../data', exist_ok=True)
 
 # 写入CSV - 包含所有数据（gp5 + grp5）
 csv_content = """id,filename,coin_count,total_value
@@ -31,6 +31,6 @@ csv_content = """id,filename,coin_count,total_value
 23,23.jpg,20,8.88
 24,24.jpg,26,10.05"""
 
-with open('data/ground_truth.csv', 'w', encoding='utf-8') as f:
+with open('../data/ground_truth.csv', 'w', encoding='utf-8') as f:
     f.write(csv_content)
 
