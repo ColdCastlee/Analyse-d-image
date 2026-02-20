@@ -3,7 +3,7 @@ import cv2 as cv
 import math
 import matplotlib.pyplot as plt
 
-original = cv.imread("C:/Users/hp/Desktop/AnalyseImage/Currency_Vision/dataset/images/3.jpg")
+original = cv.imread("dataset/images/8.jpg")
 detected = original.copy()
 img = original.copy()
 
@@ -51,12 +51,21 @@ euro_ratios = {
     "1c": 0.63
 }
 
+coin_values = {
+    "2€": 2.00,
+    "1€": 1.00,
+    "50c": 0.50,
+    "20c": 0.20,
+    "10c": 0.10,
+    "5c": 0.05,
+    "2c": 0.02,
+    "1c": 0.01
+}
+
+savings = 0
 # --- Classification par ratio ---
 radius = [r for (_, _, r) in circles]
 Rmax = max(radius)
-Rmin = min(radius)
-print(Rmax)
-print(Rmin)
 # --- Comptage ---
 coin_counts = {k: 0 for k in euro_ratios.keys()}
 classified = []
@@ -75,6 +84,7 @@ for (x, y, r) in circles:
             best_label = coin
 
     coin_counts[best_label] += 1
+    savings += coin_values[best_label]
     classified.append((x, y, r, best_label))
 
 # --- Dessin ---
@@ -82,6 +92,15 @@ for (x, y, r, label) in classified:
     cv.circle(detected, (int(x), int(y)), int(r), (0, 255, 0), 3)
     cv.putText(detected, label, (int(x - 20), int(y - 20)),
                cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+    
+cv.putText(detected,
+           f"Total = {savings:.2f} Euro",
+           (30, 50),
+           cv.FONT_HERSHEY_SIMPLEX,
+           1.2,
+           (255, 0, 0),
+           3)
+
 
 # --- Affichage ---
 plt.figure(figsize=(10,10))
