@@ -88,7 +88,7 @@ CFG = {
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp5", "18.jpg"),
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "3.jpg"),
 
 }
 def main():

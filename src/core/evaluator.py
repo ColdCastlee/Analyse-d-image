@@ -104,28 +104,32 @@ def run_pipeline_on_image(img_path, cfg):
     val_vis = img.copy()
     for i, (cx, cy, r) in enumerate(circles):
         v = int(cents_list[i]) if i < len(cents_list) else -1
-        cv2.putText(
-            val_vis,
-            f"{i}:{v}c",
-            (int(cx - r), int(cy + r)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA
-        )
+        text = f"{i}:{v}c"
+        x = int(cx - r)
+        y = int(cy + r + 30)
+
+        # --- compute text size ---
+        (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+
+        # --- draw background rectangle (black) ---
+        cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
+
+        # --- draw text (white) ---
+        cv2.putText(val_vis, text, (x, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
 
     # show total on top-left
-    cv2.putText(
-        val_vis,
-        f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)",
-        (20, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1.0,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA
-    )
+    total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
+
+    # --- compute text size ---
+    (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
+
+    # --- draw background rectangle (black) ---
+    cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
+
+    # --- draw text (white) ---
+    cv2.putText(val_vis, total_text, (20, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
     debug_dump("09_values", val_vis, cfg, img_path)
 
     return pred_count, total_euros

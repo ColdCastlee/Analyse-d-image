@@ -82,7 +82,9 @@ def classify_material_adaptive(img_bgr, circles,
         return []
 
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+
     B = lab[..., 2].astype(np.float32)
+    A = lab[..., 1].astype(np.float32)
     H, W = B.shape
 
     # Pre-build grid once (faster + cleaner)
@@ -107,8 +109,8 @@ def classify_material_adaptive(img_bgr, circles,
         b_outer = float(np.median(B[outer]))
         diff = float(abs(b_outer - b_inner))
 
-        b_mean = float(np.median(B[whole]))
-        feats.append((True, diff, b_mean))
+        a_mean = float(np.median(A[whole]))
+        feats.append((True, diff, a_mean))
 
     diffs = np.array([d for ok, d, m in feats if ok], dtype=np.float32)
     means = np.array([m for ok, d, m in feats if ok], dtype=np.float32)
@@ -117,13 +119,14 @@ def classify_material_adaptive(img_bgr, circles,
         return ["unknown"] * len(circles)
 
     diff_th = float(np.median(diffs) + 2.0 * np.std(diffs))
+    diff_th = max(diff_th, 4.0)  # minimum threshold for bimetal detection
     mean_th = float(np.median(means))
 
     materials = []
     for ok, diff, mean in feats:
         if not ok:
             materials.append("unknown")
-        elif diff > diff_th:
+        elif diff >= diff_th:
             materials.append("bimetal")
         else:
             materials.append("gold" if mean > mean_th else "copper")
@@ -194,6 +197,23 @@ def estimate_values_by_bimetal_mm(img_bgr, circles, materials):
     d_mm = diam_px / scale
     values_list = [None] * len(circles)
 
+    # --- material correction using measured diameter (mm) ---
+    # Copper coins are only 1/2/5 cents (max diameter ~21.25mm)
+    # Gold coins are 10/20/50 cents (diameters >=19.75mm, 50c=24.25mm)
+    materials = list(materials)
+
+    for i in range(len(materials)):
+        di = float(d_mm[i])
+        mi = materials[i]
+
+        # If classified as copper but diameter is too large -> must be gold
+        if mi == "copper" and di > 21.6:
+            materials[i] = "gold"
+
+        # (Optional) If classified as gold but diameter is very small -> likely copper
+        if mi == "gold" and di < 18.8:
+            materials[i] = "copper"
+
     idx_copper = [i for i, mat in enumerate(materials) if mat == "copper"]
     idx_gold = [i for i, mat in enumerate(materials) if mat == "gold"]
     idx_bimetal = [i for i, mat in enumerate(materials) if mat == "bimetal"]
@@ -213,6 +233,13 @@ def estimate_values_by_bimetal_mm(img_bgr, circles, materials):
     values_list = [int(v) for v in values_list]
     return d_mm, values_list, scale
 
+def enforce_material_constraints(material, cents_pred):
+    """
+    Enforce denomination constraints based on material group.
+    Return (is_valid, corrected_cent_list).
+    """
+    allowed = MAT_GROUPS.get(material, MAT_GROUPS["unknown"])
+    return (int(cents_pred) in allowed), allowed
 
 def estimate_values_by_ratio(circles):
     """
@@ -286,13 +313,26 @@ def estimate_values_by_matching_with_fallback(img_bgr, circles, materials, mask_
             img_bgr, mask_bin_255, c, _REF_DB,
             area_tol=area_tol, nfeatures=900, use_ransac=True
         )
+        mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
+        print(f"[DBG] i={i} mat={mat} match_label={label} score={score} mm_fallback={cents_mm[i]}")
 
         # define "match success"
         ok = (label is not None) and (label in LABEL_TO_CENTS) and (score is not None) and (score >= score_th)
 
         if ok:
-            cents_final.append(int(LABEL_TO_CENTS[label]))
-            debug_used.append((i, "MATCH", label, score))
+            pred_cent = int(LABEL_TO_CENTS[label])
+
+            # Reject impossible denomination given the material (e.g., gold coin -> 5c)
+            mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
+            valid, allowed = enforce_material_constraints(mat, pred_cent)
+
+            if valid:
+                cents_final.append(pred_cent)
+                debug_used.append((i, "MATCH", label, score))
+            else:
+                # If material constraint fails, fallback to mm-based result
+                cents_final.append(int(cents_mm[i]))
+                debug_used.append((i, "MM_FALLBACK_MAT", label, score, mat, allowed))
         else:
             # fallback to mm-based classification
             cents_final.append(int(cents_mm[i]))

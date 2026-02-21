@@ -22,7 +22,7 @@ def imwrite_unicode(path: str, img):
     buf.tofile(path)
     return True
 
-def show_fit(win, image, max_w=1200, max_h=800):
+def show_fit(win, image, max_w=1600, max_h=1200):
     """Resize for display."""
     h, w = image.shape[:2]
     scale = min(max_w / w, max_h / h, 1.0)
