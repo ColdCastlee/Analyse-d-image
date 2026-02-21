@@ -2,7 +2,7 @@
 import os
 
 from core.data_loader import load_annotations
-from core.evaluator import evaluate_dataset
+from core.evaluator import evaluate_dataset, evaluate_one_image
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # .../src
 ROOT_DIR = os.path.dirname(BASE_DIR)                   # .../Analyse-d-image
@@ -65,22 +65,64 @@ CFG = {
     # -----------------------------------------------------
     "CLASSIFY_METHOD_ID": 2,
 
-    # -----------------------------------------------------
-    # DEBUG VISUALIZATION
-    # False = batch evaluation (recommended)
-    # True  = show intermediate results (single-image debug)
-    # -----------------------------------------------------
-    "SHOW_DEBUG": False
-}
+    # =====================================================
+    # RUN MODE (CHOOSE ONE)
+    # =====================================================
+    # True  -> single-image debug mode
+    #          (image visualization / saving is allowed)
+    # False -> batch evaluation mode
+    #          (DEBUG_MODE will be forced to "none")
+    "RUN_DEBUG_SINGLE": True,
 
+    # Debug output mode
+    # Effective ONLY when RUN_DEBUG_SINGLE = True
+    # Options:
+    #   "none" -> no visualization, no saving
+    #   "show" -> display images only
+    #   "save" -> save images only
+    #   "both" -> display and save images
+    "DEBUG_MODE": "both",
+
+    # Output directory for saved debug images
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
+
+    # Image path for single-image debug
+    # Used ONLY when RUN_DEBUG_SINGLE = True
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp5", "18.jpg"),
+
+}
 def main():
     ann = load_annotations(ANN_PATH)
+
+    # -----------------------------------------------------
+    # SINGLE-IMAGE DEBUG MODE
+    # -----------------------------------------------------
+    if CFG.get("RUN_DEBUG_SINGLE", False):
+        img_path = CFG["DEBUG_IMAGE_PATH"]
+        if not os.path.isabs(img_path):
+            img_path = os.path.join(ROOT_DIR, img_path)
+
+        evaluate_one_image(
+            img_path=img_path,
+            ann_dict=ann,
+            cfg=CFG,
+            tol_count=0,
+            tol_euro=0.10
+        )
+        return
+
+    # -----------------------------------------------------
+    # BATCH EVALUATION MODE
+    # -----------------------------------------------------
+    # Force DEBUG_MODE to "none" to avoid excessive
+    # visualization or disk usage during batch processing
+    CFG["DEBUG_MODE"] = "none"
 
     evaluate_dataset(
         images_dir=IMAGES_DIR,
         ann_dict=ann,
         cfg=CFG,
-        team_filter=None,        # or "gp5"
+        team_filter=None,
         tol_count=0,
         tol_euro=0.10,
         max_items=None,

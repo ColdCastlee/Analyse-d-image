@@ -1,9 +1,8 @@
-# src/core/evaluator.py
-import os
 import math
 import cv2
+import os
 
-from core.io_utils import imread_unicode, show_fit
+from core.io_utils import imread_unicode, show_fit, debug_dump
 from core.preprocess import to_gray, denoise, enhance_contrast
 from core.segmentation import apply_segmentation
 from core.morphology import apply_morphology
@@ -21,33 +20,74 @@ def rmse(xs):
     return math.sqrt(sum((x * x) for x in xs) / max(1, len(xs)))
 
 
+def _draw_circles(img_bgr, circles):
+    out = img_bgr.copy()
+    for (cx, cy, r) in circles:
+        cv2.circle(out, (int(cx), int(cy)), int(round(r)), (0, 255, 0), 2)
+        cv2.circle(out, (int(cx), int(cy)), 2, (0, 0, 255), -1)
+    return out
+
 def run_pipeline_on_image(img_path, cfg):
     """
     Returns: (pred_count:int, pred_euros:float)
-    Raises exception if anything breaks.
     """
     img = imread_unicode(img_path)
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
 
-    gray = to_gray(img)
-    blur = denoise(gray, (7, 7), 0)
-    enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
+    debug_dump("00_input", img, cfg, img_path)
 
-    binary, _ = apply_segmentation(cfg["SEG_METHOD_ID"], img, gray, enhanced)
+    gray = to_gray(img)
+    debug_dump("01_gray", gray, cfg, img_path)
+
+    blur = denoise(gray, (7, 7), 0)
+    debug_dump("02_blur", blur, cfg, img_path)
+
+    enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
+    debug_dump("03_enhanced", enhanced, cfg, img_path)
+
+    binary, seg_name = apply_segmentation(cfg["SEG_METHOD_ID"], img, gray, enhanced)
+    debug_dump(f"04_binary_{seg_name}", binary, cfg, img_path)
+
     mask = apply_morphology(cfg["MORPH_METHOD_ID"], binary, enhanced)
+    debug_dump(f"05_mask_morph{cfg['MORPH_METHOD_ID']}", mask, cfg, img_path)
 
     if cfg["SEP_METHOD_ID"] == 1:
-        mask = watershed_separate(img, mask, show_debug=cfg["SHOW_DEBUG"], show_fit=show_fit)
+        mask = watershed_separate(img, mask, show_debug=False, show_fit=show_fit)
+        debug_dump("06_mask_watershed", mask, cfg, img_path)
 
     circles = detect_circles(cfg["DETECT_METHOD_ID"], img, enhanced, mask)
-    pred_count = int(len(circles))
+    debug_dump(f"07_detect_circles_n{len(circles)}", _draw_circles(img, circles), cfg, img_path)
 
+    pred_count = int(len(circles))
     if pred_count == 0:
+        # Optional: still dump a "no coins" stage
+        debug_dump("08_no_coins", img, cfg, img_path)
         return 0, 0.0
 
+    # ---------------------------------------------------------
+    # 08) Material classification debug (overlay labels)
+    # ---------------------------------------------------------
     materials = classify_material_adaptive(img, circles)
 
+    mat_vis = img.copy()
+    for i, (cx, cy, r) in enumerate(circles):
+        m = materials[i] if i < len(materials) else "unknown"
+        cv2.putText(
+            mat_vis,
+            f"{i}:{m}",
+            (int(cx - r), int(cy - r)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
+    debug_dump("08_materials", mat_vis, cfg, img_path)
+
+    # ---------------------------------------------------------
+    # 09) Value estimation debug
+    # ---------------------------------------------------------
     if cfg["CLASSIFY_METHOD_ID"] == 2:
         _, cents_list, _ = estimate_values(
             cfg["CLASSIFY_METHOD_ID"], img, circles, materials,
@@ -59,14 +99,45 @@ def run_pipeline_on_image(img_path, cfg):
         )
 
     total_cents = int(sum(int(v) for v in cents_list))
-    return pred_count, total_cents / 100.0
+    total_euros = total_cents / 100.0
+
+    val_vis = img.copy()
+    for i, (cx, cy, r) in enumerate(circles):
+        v = int(cents_list[i]) if i < len(cents_list) else -1
+        cv2.putText(
+            val_vis,
+            f"{i}:{v}c",
+            (int(cx - r), int(cy + r)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
+
+    # show total on top-left
+    cv2.putText(
+        val_vis,
+        f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)",
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
+    debug_dump("09_values", val_vis, cfg, img_path)
+
+    return pred_count, total_euros
 
 
 def _safe_float(x, default=0.0):
     try:
+        if x is None:
+            return float(default)
         return float(x)
     except Exception:
-        return default
+        return float(default)
 
 
 def write_report_txt(report_path, summary_lines, mismatch_lines, error_lines, missing_lines):
@@ -98,6 +169,71 @@ def write_report_txt(report_path, summary_lines, mismatch_lines, error_lines, mi
             for line in missing_lines:
                 f.write(line.rstrip() + "\n")
 
+def evaluate_one_image(img_path, ann_dict, cfg, tol_count=0, tol_euro=0.10, runner=None, name=None):
+    """
+    Evaluate a single image (per-image metrics only; no aggregates).
+
+    runner: callable(img_path)->(pred_count:int, pred_euros:float)
+            If None, use run_pipeline_on_image(img_path, cfg).
+
+    name: optional label printed in console (e.g., "Fallou_P1").
+    """
+    team = os.path.basename(os.path.dirname(img_path))
+    fn = basename_only(img_path)
+    key = (team, fn)
+
+    if key not in ann_dict:
+        print(f"[SKIP] {team}/{fn} -> annotation not found")
+        return
+
+    gt_count = ann_dict[key].get("count", None)
+    gt_euros = ann_dict[key].get("euros", None)
+
+    if gt_count is None or gt_euros is None:
+        print(f"[SKIP] {team}/{fn} -> incomplete annotation: count={gt_count}, euros={gt_euros}")
+        return
+
+    try:
+        if runner is None:
+            pred_count, pred_euros = run_pipeline_on_image(img_path, cfg)
+        else:
+            pred_count, pred_euros = runner(img_path)
+
+        pred_count = int(pred_count)
+        pred_euros = float(pred_euros)
+
+        ce = int(pred_count - int(gt_count))
+        ve = float(pred_euros - float(gt_euros))
+
+        ok_count = (abs(ce) <= tol_count)
+        ok_euro  = (abs(ve) <= tol_euro)
+        ok_both  = ok_count and ok_euro
+
+        tag = f"{name} | " if name else ""
+
+        print("=================================================")
+        print(f"{tag}IMAGE: {team}/{fn}")
+        print(f"GT   : count={int(gt_count)}  euros={float(gt_euros):.2f}")
+        print(f"PRED : count={int(pred_count)} euros={float(pred_euros):.2f}")
+        print("-------------------------------------------------")
+        print(f"[COUNT] err={ce:+d}  pass(|err|<={tol_count})={ok_count}")
+        print(f"[EURO ] err={ve:+.2f}€ pass(|err|<={tol_euro:.2f}€)={ok_euro}")
+        print(f"[BOTH ] pass={ok_both}")
+        print("=================================================")
+
+        # If using built-in pipeline, debug windows may be open -> wait for keypress
+        mode = (cfg.get("DEBUG_MODE") or "none").lower()
+        if runner is None and mode in ("show", "both"):
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+
+    except Exception as e:
+        tag = f"{name} | " if name else ""
+        print("=================================================")
+        print(f"{tag}IMAGE: {team}/{fn}")
+        print(f"GT   : count={gt_count} euros={_safe_float(gt_euros):.2f}")
+        print(f"ERROR: {e}")
+        print("=================================================")
 
 def evaluate_dataset(images_dir, ann_dict, cfg,
                      team_filter=None,
@@ -106,13 +242,14 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
                      report_path="evaluation_report.txt",
                      runner=None):
     """
-    Metrics printed in English.
-    Writes full mismatch list to a txt report.
-    runner: callable(img_path)->(pred_count:int, pred_euros:float)
-            If None, will use run_pipeline_on_image(img_path, cfg).
+    Batch evaluation.
+    IMPORTANT: Debug visualization/saving is disabled in batch mode
+    to avoid generating too many images/windows.
     """
+    # Hard-disable any debug dumping in batch mode
+    cfg["DEBUG_MODE"] = "none"
 
-    def _safe_float(x, default=0.0):
+    def _safe_float_local(x, default=0.0):
         try:
             if x is None:
                 return float(default)
@@ -210,10 +347,12 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
         ]
 
         error_lines = [
-            f"{r['team']}/{r['file']} | GT count={r['gt_count']} GT €={_safe_float(r['gt_euros']):.2f} | ERROR: {r['err']}"
+            f"{r['team']}/{r['file']} | GT count={r['gt_count']} GT €={_safe_float_local(r['gt_euros']):.2f} | ERROR: {r['err']}"
             for r in results_err
         ]
 
+        # If your evaluator.py already has write_report_txt(), keep using it.
+        # Otherwise, remove these 2 lines.
         write_report_txt(report_path, summary_lines, [], error_lines, missing_lines)
         print(f"Report saved to: {report_path}")
         return
@@ -259,7 +398,7 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
     for r in results_err:
         error_lines.append(
             f"{r['team']}/{r['file']} | "
-            f"GT count={r['gt_count']} GT €={_safe_float(r['gt_euros']):.2f} | "
+            f"GT count={r['gt_count']} GT €={_safe_float_local(r['gt_euros']):.2f} | "
             f"ERROR: {r['err']}"
         )
 
@@ -305,6 +444,6 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
     print(f"Correct BOTH (count + value)  : {correct_both_images}/{evaluated_images}")
     print("=================================================")
 
-    # Write report
+    # Write report (requires write_report_txt to exist in this file)
     write_report_txt(report_path, summary_lines, mismatch_lines, error_lines, missing_lines)
     print(f"Report saved to: {report_path}")
