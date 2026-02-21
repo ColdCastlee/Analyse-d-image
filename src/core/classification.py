@@ -58,45 +58,72 @@ LABEL_TO_CENTS = {
 }
 
 
-def classify_material_adaptive(img_bgr, circles):
+def classify_material_adaptive(img_bgr, circles,
+                               inner_ratio=0.50,
+                               outer_r0=0.70,
+                               outer_r1=0.95,
+                               min_pixels=50):
+    """
+    Return: list[str] in {"copper","gold","bimetal","unknown"} for each circle.
+
+    Logic:
+      - Work in LAB, use B channel.
+      - Compute:
+          diff = |median(B_outer) - median(B_inner)|
+          mean = median(B_whole_coin)
+      - Thresholds are adaptive from current image:
+          diff_th = median(diffs) + 2*std(diffs)
+          mean_th = median(means)
+      - If diff > diff_th -> bimetal
+        else -> gold if mean > mean_th else copper
+    """
+
+    if circles is None or len(circles) == 0:
+        return []
+
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
     B = lab[..., 2].astype(np.float32)
     H, W = B.shape
 
-    feats = []
+    # Pre-build grid once (faster + cleaner)
+    yy, xx = np.ogrid[:H, :W]
+
+    feats = []  # each item: (is_valid:bool, diff:float, mean:float)
     for (cx, cy, r) in circles:
-        yy, xx = np.ogrid[:H, :W]
+        cx = float(cx); cy = float(cy); r = float(r)
+
         dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
 
-        inner = dist < 0.5 * r
-        outer = (dist > 0.7 * r) & (dist < 0.95 * r)
+        inner = dist < (inner_ratio * r)
+        outer = (dist > (outer_r0 * r)) & (dist < (outer_r1 * r))
+        whole = dist < (outer_r1 * r)
 
-        if inner.sum() < 50 or outer.sum() < 50:
-            feats.append(("unknown", 0, 0))
+        if inner.sum() < min_pixels or outer.sum() < min_pixels or whole.sum() < min_pixels:
+            feats.append((False, 0.0, 0.0))
             continue
 
-        b_inner = float(np.mean(B[inner]))
-        b_outer = float(np.mean(B[outer]))
-        diff = abs(b_outer - b_inner)
-        b_mean = float(np.mean(B[dist < 0.95 * r]))
-        feats.append((diff, b_mean))
+        # median is often more robust than mean (less sensitive to highlights)
+        b_inner = float(np.median(B[inner]))
+        b_outer = float(np.median(B[outer]))
+        diff = float(abs(b_outer - b_inner))
 
-    diffs = np.array([f[0] for f in feats if f[0] != "unknown"], dtype=np.float32)
-    means = np.array([f[1] for f in feats if f[0] != "unknown"], dtype=np.float32)
+        b_mean = float(np.median(B[whole]))
+        feats.append((True, diff, b_mean))
 
-    if len(diffs) == 0:
+    diffs = np.array([d for ok, d, m in feats if ok], dtype=np.float32)
+    means = np.array([m for ok, d, m in feats if ok], dtype=np.float32)
+
+    if diffs.size == 0:
         return ["unknown"] * len(circles)
 
-    diff_th = float(np.median(diffs) + 2 * np.std(diffs))
+    diff_th = float(np.median(diffs) + 2.0 * np.std(diffs))
     mean_th = float(np.median(means))
 
     materials = []
-    for f in feats:
-        if f[0] == "unknown":
+    for ok, diff, mean in feats:
+        if not ok:
             materials.append("unknown")
-            continue
-        diff, mean = f
-        if diff > diff_th:
+        elif diff > diff_th:
             materials.append("bimetal")
         else:
             materials.append("gold" if mean > mean_th else "copper")
