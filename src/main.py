@@ -21,7 +21,7 @@ CFG = {
     # 2 = MSER-based region detection
     # 3 = K-means color clustering
     # -----------------------------------------------------
-    "SEG_METHOD_ID": 0,
+    "SEG_METHOD_ID": 3,
 
     # -----------------------------------------------------
     # MORPHOLOGICAL POST-PROCESSING
@@ -72,7 +72,7 @@ CFG = {
     #          (image visualization / saving is allowed)
     # False -> batch evaluation mode
     #          (DEBUG_MODE will be forced to "none")
-    "RUN_DEBUG_SINGLE": True,
+    "RUN_DEBUG_SINGLE": False,
 
     # Debug output mode
     # Effective ONLY when RUN_DEBUG_SINGLE = True
@@ -81,7 +81,7 @@ CFG = {
     #   "show" -> display images only
     #   "save" -> save images only
     #   "both" -> display and save images
-    "DEBUG_MODE": "both",
+    "DEBUG_MODE": "none",
 
     # Output directory for saved debug images
     "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
@@ -92,7 +92,8 @@ CFG = {
 
 }
 def main():
-    ann = load_annotations(ANN_PATH)
+    TEAM = None
+    ann = load_annotations(ANN_PATH, team_filter=TEAM)
 
     # -----------------------------------------------------
     # SINGLE-IMAGE DEBUG MODE
@@ -116,17 +117,17 @@ def main():
     # -----------------------------------------------------
     # Force DEBUG_MODE to "none" to avoid excessive
     # visualization or disk usage during batch processing
-    CFG["DEBUG_MODE"] = "none"
+    # CFG["DEBUG_MODE"] = "none"
 
     evaluate_dataset(
         images_dir=IMAGES_DIR,
         ann_dict=ann,
         cfg=CFG,
-        team_filter=None,
+        team_filter=TEAM,
         tol_count=0,
         tol_euro=0.10,
         max_items=None,
-        report_path=os.path.join(ROOT_DIR, "evaluation_report.txt")
+        report_path=os.path.join(ROOT_DIR, "evaluation_report_gp5.txt")
     )
 
 if __name__ == "__main__":

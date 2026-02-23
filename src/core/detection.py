@@ -58,7 +58,7 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
         return []
 
     med_area = float(np.median(areas_all))
-    min_area = 0.50 * med_area
+    min_area = 0.4 * med_area
     split_area_th = 1.8 * med_area
 
     print("CC count:", num - 1, "median area:", med_area, "min_area:", min_area, "split_th:", split_area_th)

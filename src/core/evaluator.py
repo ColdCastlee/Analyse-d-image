@@ -250,8 +250,6 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
     IMPORTANT: Debug visualization/saving is disabled in batch mode
     to avoid generating too many images/windows.
     """
-    # Hard-disable any debug dumping in batch mode
-    cfg["DEBUG_MODE"] = "none"
 
     def _safe_float_local(x, default=0.0):
         try:
