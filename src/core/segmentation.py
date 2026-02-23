@@ -25,14 +25,31 @@ def seg_mser(gray):
     return binary
 
 def seg_kmeans_color(img_bgr, k=2):
-    pixels = img_bgr.reshape(-1, 3).astype(np.float32)
+    # Median blur to reduce noise/shadows
+    img_blur = cv2.medianBlur(img_bgr, 5)
+    
+    # Convert to HSV
+    img_hsv = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)
+    
+    # Cluster on H and S (ignore V for shadow robustness)
+    pixels_hs = img_hsv[..., :2].reshape(-1, 2).astype(np.float32)
+    
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-    _, labels, centers = cv2.kmeans(pixels, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
-    centers = np.uint8(centers)
-    segmented = centers[labels.flatten()].reshape(img_bgr.shape)
-
-    color_gray = cv2.cvtColor(segmented, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(color_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    _, labels, centers = cv2.kmeans(pixels_hs, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+    
+    labels = labels.flatten()
+    
+    # Select foreground: higher mean S (coins have saturation, background doesn't)
+    S = img_hsv[..., 1].flatten().astype(np.float32)
+    mean_S = [np.mean(S[labels == i]) for i in range(k)]
+    fg_label = np.argmax(mean_S)
+    
+    binary = (labels == fg_label).reshape(img_bgr.shape[:2]).astype(np.uint8) * 255
+    
+    # Close to fill any small holes
+    kernel = np.ones((11, 11), np.uint8)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=3)
+    
     return binary
 
 def seg_hybrid_adaptive_edge(enhanced, gray, canny_low=30, canny_high=120): 

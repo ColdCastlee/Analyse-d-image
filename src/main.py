@@ -84,7 +84,7 @@ CFG = {
     "DEBUG_MODE": "save",
 
     # Output directory for saved debug images
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_n"),
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
