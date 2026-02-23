@@ -58,8 +58,8 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
         return []
 
     med_area = float(np.median(areas_all))
-    min_area = 0.50 * med_area
-    split_area_th = 1.8 * med_area
+    min_area = 0.3 * med_area
+    split_area_th = 1.5 * med_area
 
     print("CC count:", num - 1, "median area:", med_area, "min_area:", min_area, "split_th:", split_area_th)
 
@@ -87,14 +87,14 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
             roi_blur = cv2.medianBlur(roi_gray, 5)
 
             r_guess = np.sqrt((area / 2.0) / np.pi)
-            minR = int(max(10, 0.65 * r_guess))
-            maxR = int(1.35 * r_guess)
-            minDist = int(max(20, 1.2 * r_guess))
+            minR = int(max(10, 0.55 * r_guess))
+            maxR = int(1.45 * r_guess)
+            minDist = int(max(20, 1.0 * r_guess))
 
             c = cv2.HoughCircles(
                 roi_blur, cv2.HOUGH_GRADIENT,
                 dp=1.2, minDist=minDist,
-                param1=120, param2=22,
+                param1=100, param2=18,
                 minRadius=minR, maxRadius=maxR
             )
 
@@ -110,38 +110,18 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
                         if roi_mask[cy_i, cx_i] > 0:
                             kept.append((cx, cy, r))
 
-                # Keep up to 2 circles from Hough candidates
-                kept = sorted(kept, key=lambda t: -t[2])[:2]
+                # Keep up to 3 circles from Hough candidates
+                kept = sorted(kept, key=lambda t: -t[2])[:3]
 
                 if len(kept) >= 1:
-                    # Always accept the best one
                     cx1, cy1, r1 = kept[0]
                     circles.append((int(x0 + cx1), int(y0 + cy1), float(r1)))
-
-                    # Accept a second one ONLY if clearly separated (likely two coins)
-                    if len(kept) == 2:
-                        cx2, cy2, r2 = kept[1]
-                        dist = float(np.hypot(cx1 - cx2, cy1 - cy2))
-
-                        # If too close -> shadow / duplicate
-                        if dist > 1.45 * min(r1, r2):
-                            circles.append((int(x0 + cx2), int(y0 + cy2), float(r2)))
-
+                    for k in range(1, len(kept)):
+                        cxk, cyk, rk = kept[k]
+                        dist = float(np.hypot(cx1 - cxk, cy1 - cyk))
+                        if dist > 1.3 * min(r1, rk):  # Lower thresh to accept more
+                            circles.append((int(x0 + cxk), int(y0 + cyk), float(rk)))
                     continue
-            # --- final dedup (NMS-like) ---
-            circles_sorted = sorted(circles, key=lambda t: -t[2])  # larger first
-            kept_final = []
-            for (cx, cy, r) in circles_sorted:
-                ok = True
-                for (kx, ky, kr) in kept_final:
-                    dist = float(np.hypot(cx - kx, cy - ky))
-                    # if centers are too close and radii similar -> duplicate
-                    if dist < 0.60 * min(r, kr) and abs(r - kr) / max(kr, 1e-6) < 0.35:
-                        ok = False
-                        break
-                if ok:
-                    kept_final.append((cx, cy, r))
-            circles = kept_final
 
             cx, cy = centroids[i]
             r = float(np.sqrt(area / np.pi))

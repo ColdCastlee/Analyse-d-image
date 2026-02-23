@@ -208,7 +208,7 @@ def _good_match_score(des_q, kp_q, des_r, kp_r, use_ransac=True):
     return float(score), len(good), nin
 
 def match_coin_orb_area(img_bgr, mask_bin_255, circle, ref_db,
-                        area_tol=0.35, nfeatures=800, use_ransac=True):
+                        area_tol=0.45, nfeatures=800, use_ransac=True):
     """
     CM06 matching coin:
     - Use area to filter candidates + estimate scale factor

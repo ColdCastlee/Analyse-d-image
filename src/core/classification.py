@@ -59,8 +59,8 @@ LABEL_TO_CENTS = {
 
 
 def classify_material_adaptive(img_bgr, circles,
-                               inner_ratio=0.50,
-                               outer_r0=0.70,
+                               inner_ratio=0.45,
+                               outer_r0=0.65,
                                outer_r1=0.95,
                                min_pixels=50):
     """
@@ -119,7 +119,7 @@ def classify_material_adaptive(img_bgr, circles,
         return ["unknown"] * len(circles)
 
     diff_th = float(np.median(diffs) + 2.0 * np.std(diffs))
-    diff_th = max(diff_th, 4.0)  # minimum threshold for bimetal detection
+    diff_th = max(diff_th, 3.0)  # minimum threshold for bimetal detection
     mean_th = float(np.median(means))
 
     materials = []
@@ -177,61 +177,65 @@ def assign_by_ranking(d_mm, values_list, idxs, allowed_values):
 
 
 def estimate_values_by_bimetal_mm(img_bgr, circles, materials):
-    """
-    Your original: anchor scale with bimetal -> mm -> match by groups.
-    Returns: d_mm, values_list(cents), scale(px/mm)
-    """
     diam_px = np.array([2.0 * float(r) for (_, _, r) in circles], dtype=np.float32)
-
     bimetal_idxs = [i for i, m in enumerate(materials) if m == "bimetal"]
     if len(bimetal_idxs) == 0:
         raise RuntimeError("No bimetal coin detected → cannot anchor scale")
+    bi = max(bimetal_idxs, key=lambda i: diam_px[i])  # largest bimetal as anchor
 
-    bi = max(bimetal_idxs, key=lambda i: diam_px[i])
-    cx, cy, r = circles[bi]
-    coin_type = bimetal_type_1e_or_2e(img_bgr, cx, cy, r)
-
-    scale = float(diam_px[bi] / COINS_DIAM_MM[coin_type])  # px/mm
-    print(f"[ANCHOR] coin index={bi}, type={coin_type}, scale(px/mm)={scale:.4f}")
-
-    d_mm = diam_px / scale
-    values_list = [None] * len(circles)
-
-    # --- material correction using measured diameter (mm) ---
-    # Copper coins are only 1/2/5 cents (max diameter ~21.25mm)
-    # Gold coins are 10/20/50 cents (diameters >=19.75mm, 50c=24.25mm)
+    # Material correction (unchanged)
+    d_mm_temp = diam_px / (diam_px[bi] / COINS_DIAM_MM[200])  # temp scale for correction
     materials = list(materials)
-
     for i in range(len(materials)):
-        di = float(d_mm[i])
+        di = float(d_mm_temp[i])
         mi = materials[i]
-
-        # If classified as copper but diameter is too large -> must be gold
         if mi == "copper" and di > 21.6:
             materials[i] = "gold"
-
-        # (Optional) If classified as gold but diameter is very small -> likely copper
         if mi == "gold" and di < 18.8:
             materials[i] = "copper"
 
+    # Group indices (unchanged)
     idx_copper = [i for i, mat in enumerate(materials) if mat == "copper"]
     idx_gold = [i for i, mat in enumerate(materials) if mat == "gold"]
     idx_bimetal = [i for i, mat in enumerate(materials) if mat == "bimetal"]
     idx_unknown = [i for i, mat in enumerate(materials) if mat not in ("copper", "gold", "bimetal")]
 
-    assign_by_ranking(d_mm, values_list, idx_copper, MAT_GROUPS["copper"])
-    assign_by_ranking(d_mm, values_list, idx_gold, MAT_GROUPS["gold"])
+    # Try both 1€ and 2€ for anchor, choose best by minimizing diameter error
+    best_err = float('inf')
+    best_d_mm = None
+    best_scale = None
+    best_values_list = None
+    for candidate_type in [100, 200]:  # 1€ or 2€
+        scale_try = float(diam_px[bi] / COINS_DIAM_MM[candidate_type])
+        d_mm_try = diam_px / scale_try
+        values_try = [None] * len(circles)
 
-    for i in idx_bimetal:
-        cx, cy, r = circles[i]
-        values_list[i] = int(bimetal_type_1e_or_2e(img_bgr, cx, cy, r))
+        # Assign by ranking (unchanged)
+        assign_by_ranking(d_mm_try, values_try, idx_copper, MAT_GROUPS["copper"])
+        assign_by_ranking(d_mm_try, values_try, idx_gold, MAT_GROUPS["gold"])
+        for j in idx_bimetal:
+            # For other bimetals, assign closest between 100/200
+            dj = float(d_mm_try[j])
+            v = 100 if abs(dj - COINS_DIAM_MM[100]) < abs(dj - COINS_DIAM_MM[200]) else 200
+            values_try[j] = int(v)
+        for j in idx_unknown:
+            v = min(COINS_DIAM_MM.keys(), key=lambda k: abs(COINS_DIAM_MM[k] - float(d_mm_try[j])))
+            values_try[j] = int(v)
 
-    for i in idx_unknown:
-        v = min(COINS_DIAM_MM.keys(), key=lambda k: abs(COINS_DIAM_MM[k] - float(d_mm[i])))
-        values_list[i] = int(v)
+        # Compute total error
+        err_try = 0.0
+        for k, v in enumerate(values_try):
+            if v is not None:
+                err_try += abs(float(d_mm_try[k]) - COINS_DIAM_MM[v])
 
-    values_list = [int(v) for v in values_list]
-    return d_mm, values_list, scale
+        if err_try < best_err:
+            best_err = err_try
+            best_d_mm = d_mm_try
+            best_scale = scale_try
+            best_values_list = [int(v) for v in values_try]
+
+    print(f"[ANCHOR] coin index={bi}, best_type={best_values_list[bi]}, scale(px/mm)={best_scale:.4f}, err={best_err:.2f}")
+    return best_d_mm, best_values_list, best_scale
 
 def enforce_material_constraints(material, cents_pred):
     """
@@ -242,37 +246,33 @@ def enforce_material_constraints(material, cents_pred):
     return (int(cents_pred) in allowed), allowed
 
 def estimate_values_by_ratio(circles):
-    """
-    fallou method
-    """
     if len(circles) == 0:
         return [], [], 0.0
-
     radii = [float(r) for (_, _, r) in circles]
     rmax = max(radii)
     if rmax <= 1e-6:
         return [], [], 0.0
 
-    labels = []
-    cents = []
-    total = 0.0
-
-    for (_, _, r) in circles:
-        ratio = float(r) / rmax
-
-        best_label = None
-        best_diff = 1e9
-        for coin, ref in EURO_RATIOS.items():
-            diff = abs(ratio - ref)
-            if diff < best_diff:
-                best_diff = diff
-                best_label = coin
-
-        labels.append(best_label)
-        cents.append(int(LABEL_TO_CENTS[best_label]))
-        total += float(COIN_VALUES_EUR[best_label])
-
-    return labels, cents, total
+    # Try different assumptions for largest coin
+    candidate_largest = ["2€", "50c", "1€"]  # Possible max
+    best_err = float('inf')
+    best_cents = []
+    for largest_label in candidate_largest:
+        ref_ratio_max = EURO_RATIOS[largest_label]
+        scale = rmax / ref_ratio_max  # Pseudo-scale
+        ratios_try = [r / scale for r in radii]  # Normalized ratios
+        labels_try = []
+        for ratio in ratios_try:
+            best_label = min(EURO_RATIOS.keys(), key=lambda coin: abs(ratio - EURO_RATIOS[coin]))
+            labels_try.append(best_label)
+        # Compute error: sum of abs diff to refs
+        err_try = sum(abs(ratio - EURO_RATIOS[label]) for ratio, label in zip(ratios_try, labels_try))
+        if err_try < best_err:
+            best_err = err_try
+            best_labels = labels_try
+    cents = [int(LABEL_TO_CENTS[label]) for label in best_labels]
+    total = sum(COIN_VALUES_EUR[label] for label in best_labels)
+    return best_labels, cents, total
 
 from core.matching import build_ref_db, match_coin_orb_area, LABEL_TO_CENTS
 
@@ -294,50 +294,44 @@ def estimate_values_by_matching_with_fallback(img_bgr, circles, materials, mask_
     """
     Try matching each detected coin against REF_DIR (front-side refs).
     If matching is unreliable -> fallback to bimetal-mm (method 0) result.
-    Returns: d_mm (from mm method), cents_final, scale (from mm method)
+    If bimetal-mm fails (no bimetal), use ratio method (method 1) as ultimate fallback.
     """
+    try:
+        d_mm, cents_mm, scale = estimate_values_by_bimetal_mm(img_bgr, circles, materials)
+    except RuntimeError as e:
+        print(f"[WARN] Bimetal scale failed: {e}. Falling back to ratio method.")
+        _, cents_mm, _ = estimate_values_by_ratio(circles)
+        d_mm = None
+        scale = None
 
-    # 1) Fallback baseline (bimetal-mm)
-    d_mm, cents_mm, scale = estimate_values_by_bimetal_mm(img_bgr, circles, materials)
-
-    # 2) Load ref DB once
+    # Load ref DB once (unchanged)
     global _REF_DB
     if _REF_DB is None:
         _REF_DB = build_ref_db(REF_DIR, nfeatures=900)
 
     cents_final = []
     debug_used = []  # optional: store info
-
     for i, c in enumerate(circles):
         label, score = match_coin_orb_area(
             img_bgr, mask_bin_255, c, _REF_DB,
             area_tol=area_tol, nfeatures=900, use_ransac=True
         )
         mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
-        print(f"[DBG] i={i} mat={mat} match_label={label} score={score} mm_fallback={cents_mm[i]}")
-
-        # define "match success"
+        print(f"[DBG] i={i} mat={mat} match_label={label} score={score} fallback={cents_mm[i]}")
+        # define "match success" (unchanged)
         ok = (label is not None) and (label in LABEL_TO_CENTS) and (score is not None) and (score >= score_th)
-
         if ok:
             pred_cent = int(LABEL_TO_CENTS[label])
-
-            # Reject impossible denomination given the material (e.g., gold coin -> 5c)
-            mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
             valid, allowed = enforce_material_constraints(mat, pred_cent)
-
             if valid:
                 cents_final.append(pred_cent)
                 debug_used.append((i, "MATCH", label, score))
             else:
-                # If material constraint fails, fallback to mm-based result
                 cents_final.append(int(cents_mm[i]))
-                debug_used.append((i, "MM_FALLBACK_MAT", label, score, mat, allowed))
+                debug_used.append((i, "FALLBACK_MAT", label, score, mat, allowed))
         else:
-            # fallback to mm-based classification
             cents_final.append(int(cents_mm[i]))
-            debug_used.append((i, "MM_FALLBACK", label, score))
-
+            debug_used.append((i, "FALLBACK", label, score))
     return d_mm, cents_final, scale
 
 

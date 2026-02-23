@@ -41,9 +41,10 @@ def apply_morphology(method_id, binary, enhanced):
         mask = cv2.erode(binary, k_sep, iterations=2)
         mask = cv2.dilate(mask, k_sep, iterations=2)
 
-    elif method_id == 6:    # median on closed
+    elif method_id == 6:
         closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close, iterations=2)
-        mask = cv2.medianBlur(closed, 5)
+        opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, k_open, iterations=1)  # Add opening to remove small noise
+        mask = cv2.medianBlur(opened, 7)  # Larger median for smoother
 
     elif method_id == 7:    # majority
         footprint = np.ones((5, 5), np.uint8)

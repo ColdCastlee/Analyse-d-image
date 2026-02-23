@@ -20,8 +20,9 @@ CFG = {
     # 1 = Adaptive thresholding (local)
     # 2 = MSER-based region detection
     # 3 = K-means color clustering
+    # 4 = new
     # -----------------------------------------------------
-    "SEG_METHOD_ID": 0,
+    "SEG_METHOD_ID": 4,
 
     # -----------------------------------------------------
     # MORPHOLOGICAL POST-PROCESSING
@@ -72,7 +73,7 @@ CFG = {
     #          (image visualization / saving is allowed)
     # False -> batch evaluation mode
     #          (DEBUG_MODE will be forced to "none")
-    "RUN_DEBUG_SINGLE": True,
+    "RUN_DEBUG_SINGLE": False,
 
     # Debug output mode
     # Effective ONLY when RUN_DEBUG_SINGLE = True
