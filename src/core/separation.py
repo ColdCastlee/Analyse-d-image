@@ -7,7 +7,7 @@ def watershed_separate(img_bgr, mask, show_debug=False, show_fit=None):
     sure_bg = cv2.dilate(opening, kernel, iterations=2)  # Reduce to 2
     dist = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
     dist_norm = cv2.normalize(dist, None, 0, 1.0, cv2.NORM_MINMAX)
-    _, sure_fg = cv2.threshold(dist_norm, 0.25, 1.0, 0)  # Lower to 0.25 for more fg
+    _, sure_fg = cv2.threshold(dist_norm, 0.2, 1.0, 0)  # Even lower for more fg
     sure_fg = np.uint8(sure_fg * 255)
     sure_fg = cv2.erode(sure_fg, kernel, iterations=1)  # Reduce to 1
     unknown = cv2.subtract(sure_bg, sure_fg)

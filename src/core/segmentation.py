@@ -7,7 +7,7 @@ def seg_otsu(enhanced):
     _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     return binary
 
-def seg_adaptive(enhanced, block_size=11, C=2):
+def seg_adaptive(enhanced, block_size=31, C=1):
     return cv2.adaptiveThreshold(
         enhanced, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,

@@ -22,7 +22,7 @@ CFG = {
     # 3 = K-means color clustering
     # 4 = new
     # -----------------------------------------------------
-    "SEG_METHOD_ID": 1,
+    "SEG_METHOD_ID": 0,
 
     # -----------------------------------------------------
     # MORPHOLOGICAL POST-PROCESSING
@@ -73,7 +73,7 @@ CFG = {
     #          (image visualization / saving is allowed)
     # False -> batch evaluation mode
     #          (DEBUG_MODE will be forced to "none")
-    "RUN_DEBUG_SINGLE": False,
+    "RUN_DEBUG_SINGLE": True,
 
     # Debug output mode
     # Effective ONLY when RUN_DEBUG_SINGLE = True
@@ -89,8 +89,7 @@ CFG = {
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "3.jpg"),
-
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp5", "17.jpg"),
 }
 def main():
     ann = load_annotations(ANN_PATH)
