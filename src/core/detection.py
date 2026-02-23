@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+
 def _dedup_circles(circles, center_frac=0.35, r_frac=0.25):
     """
     Remove duplicate circle detections (multiple circles for the same coin).
@@ -58,8 +59,8 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
         return []
 
     med_area = float(np.median(areas_all))
-    min_area = 0.25 * med_area
-    split_area_th = 2.0 * med_area
+    min_area = 0.50 * med_area
+    split_area_th = 1.8 * med_area
 
     print("CC count:", num - 1, "median area:", med_area, "min_area:", min_area, "split_th:", split_area_th)
 
@@ -87,14 +88,14 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
             roi_blur = cv2.medianBlur(roi_gray, 5)
 
             r_guess = np.sqrt((area / 2.0) / np.pi)
-            minR = int(max(10, 0.6 * r_guess))
-            maxR = int(1.45 * r_guess)
-            minDist = int(max(20, 1.0 * r_guess))
+            minR = int(max(10, 0.65 * r_guess))
+            maxR = int(1.35 * r_guess)
+            minDist = int(max(20, 1.2 * r_guess))
 
             c = cv2.HoughCircles(
                 roi_blur, cv2.HOUGH_GRADIENT,
                 dp=1.2, minDist=minDist,
-                param1=100, param2=18,
+                param1=120, param2=22,
                 minRadius=minR, maxRadius=maxR
             )
 
@@ -110,22 +111,24 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
                         if roi_mask[cy_i, cx_i] > 0:
                             kept.append((cx, cy, r))
 
-                # Keep up to 3 circles from Hough candidates
-                kept = sorted(kept, key=lambda t: -t[2])[:5]
+                # Keep up to 2 circles from Hough candidates
+                kept = sorted(kept, key=lambda t: -t[2])[:2]
 
                 if len(kept) >= 1:
+                    # Always accept the best one
                     cx1, cy1, r1 = kept[0]
                     circles.append((int(x0 + cx1), int(y0 + cy1), float(r1)))
-                    for k in range(1, len(kept)):
-                        cxk, cyk, rk = kept[k]
-                        dist = float(np.hypot(cx1 - cxk, cy1 - cyk))
-                        if dist > 1.1 * min(r1, rk):  # Lower thresh to accept more
-                            circles.append((int(x0 + cxk), int(y0 + cyk), float(rk)))
+
+                    # Accept a second one ONLY if clearly separated (likely two coins)
+                    if len(kept) == 2:
+                        cx2, cy2, r2 = kept[1]
+                        dist = float(np.hypot(cx1 - cx2, cy1 - cy2))
+
+                        # If too close -> shadow / duplicate
+                        if dist > 1.45 * min(r1, r2):
+                            circles.append((int(x0 + cx2), int(y0 + cy2), float(r2)))
+
                     continue
-            cx, cy = centroids[i]
-            r = float(np.sqrt(area / np.pi))
-            circles.append((int(cx), int(cy), r))
-            continue
 
         cx, cy = centroids[i]
         r = float(np.sqrt(area / np.pi))
@@ -133,7 +136,7 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
 
     # Remove duplicate detections (same coin detected multiple times)
     before = len(circles)
-    circles = _dedup_circles(circles, center_frac=0.3, r_frac=0.3)
+    circles = _dedup_circles(circles)
     after = len(circles)
 
     print(f"Detected coins (raw): {before}, after dedup: {after}")
@@ -147,7 +150,7 @@ def detect_circles_contours_min_enclosing(mask, min_radius_px=60):
     
     if len(contours) == 0:
         print("Aucune pièce détectée")
-        exit()
+        return []
     
     circles = []
     for ctr in contours:
@@ -158,6 +161,42 @@ def detect_circles_contours_min_enclosing(mask, min_radius_px=60):
     print("Contours count:", len(contours), "Detected circles:", len(circles), f"(minR={min_radius_px})")
     return circles
 
+def detect_ellipses(mask, min_area=100, max_ecc=0.7):
+    """
+    New method for tilted coins: contours -> fitEllipse -> filter eccentricity (for nearly circular shapes).
+    Estimate radius as average of axes / 2.
+    """
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if len(contours) == 0:
+        print("Aucune pièce détectée")
+        return []
+    
+    ellipses = []
+    for ctr in contours:
+        if len(ctr) < 5:  # fitEllipse needs at least 5 points
+            continue
+        
+        area = cv2.contourArea(ctr)
+        if area < min_area:
+            continue
+        
+        ellipse = cv2.fitEllipse(ctr)
+        (cx, cy), (minor, major), angle = ellipse
+        
+        ecc = np.sqrt(1 - (minor / major)**2) if major > 0 else 1.0
+        if ecc > max_ecc:  # too elliptical (heavy tilt)
+            continue
+        
+        r = (minor + major) / 4.0  # average radius (minor/2 + major/2)/2
+        
+        ellipses.append((cx, cy, r))
+    
+    # Dedup similar to circles
+    ellipses = _dedup_circles(ellipses, center_frac=0.4, r_frac=0.3)  # looser for tilt
+    
+    print("Contours count:", len(contours), "Detected ellipses:", len(ellipses), f"(max_ecc={max_ecc})")
+    return ellipses
 
 def detect_circles(method_id, img_bgr, enhanced, mask):
     """
@@ -167,4 +206,6 @@ def detect_circles(method_id, img_bgr, enhanced, mask):
         return detect_circles_cc_hough(img_bgr, enhanced, mask)
     if method_id == 1:
         return detect_circles_contours_min_enclosing(mask, min_radius_px=60)
-    raise ValueError(f"Unknown DETECT_METHOD_ID={method_id}. Use 0..1.")
+    if method_id == 2:
+        return detect_ellipses(mask, min_area=100, max_ecc=0.7)
+    raise ValueError(f"Unknown DETECT_METHOD_ID={method_id}. Use 0..2.")

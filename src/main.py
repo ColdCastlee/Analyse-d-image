@@ -49,7 +49,7 @@ CFG = {
     # 0 = Connected Components + local Hough (robust, default)
     # 1 = Contours + minEnclosingCircle (fast baseline)
     # -----------------------------------------------------
-    "DETECT_METHOD_ID": 0,
+    "DETECT_METHOD_ID": 2,
 
     # -----------------------------------------------------
     # COIN CLASSIFICATION / VALUE ESTIMATION
@@ -73,7 +73,7 @@ CFG = {
     #          (image visualization / saving is allowed)
     # False -> batch evaluation mode
     #          (DEBUG_MODE will be forced to "none")
-    "RUN_DEBUG_SINGLE": True,
+    "RUN_DEBUG_SINGLE": False,
 
     # Debug output mode
     # Effective ONLY when RUN_DEBUG_SINGLE = True
@@ -82,7 +82,7 @@ CFG = {
     #   "show" -> display images only
     #   "save" -> save images only
     #   "both" -> display and save images
-    "DEBUG_MODE": "both",
+    "DEBUG_MODE": "show",
 
     # Output directory for saved debug images
     "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
