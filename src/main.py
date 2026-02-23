@@ -22,7 +22,7 @@ CFG = {
     # 3 = K-means color clustering
     # 4 = new
     # -----------------------------------------------------
-    "SEG_METHOD_ID": 4,
+    "SEG_METHOD_ID": 1,
 
     # -----------------------------------------------------
     # MORPHOLOGICAL POST-PROCESSING

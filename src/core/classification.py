@@ -254,7 +254,9 @@ def estimate_values_by_ratio(circles):
         return [], [], 0.0
 
     # Try different assumptions for largest coin
-    candidate_largest = ["2€", "50c", "1€"]  # Possible max
+    candidate_largest = ["50c", "1€", "2€"]  # Possible max
+    if len(circles) < 5:
+        candidate_largest = ["50c", "20c", "1€"]
     best_err = float('inf')
     best_cents = []
     for largest_label in candidate_largest:

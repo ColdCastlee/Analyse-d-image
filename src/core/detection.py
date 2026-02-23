@@ -58,8 +58,8 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
         return []
 
     med_area = float(np.median(areas_all))
-    min_area = 0.3 * med_area
-    split_area_th = 1.5 * med_area
+    min_area = 0.4 * med_area
+    split_area_th = 1.58 * med_area
 
     print("CC count:", num - 1, "median area:", med_area, "min_area:", min_area, "split_th:", split_area_th)
 
@@ -87,14 +87,14 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
             roi_blur = cv2.medianBlur(roi_gray, 5)
 
             r_guess = np.sqrt((area / 2.0) / np.pi)
-            minR = int(max(10, 0.55 * r_guess))
+            minR = int(max(10, 0.6 * r_guess))
             maxR = int(1.45 * r_guess)
             minDist = int(max(20, 1.0 * r_guess))
 
             c = cv2.HoughCircles(
                 roi_blur, cv2.HOUGH_GRADIENT,
                 dp=1.2, minDist=minDist,
-                param1=100, param2=18,
+                param1=100, param2=25,
                 minRadius=minR, maxRadius=maxR
             )
 
@@ -111,7 +111,7 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
                             kept.append((cx, cy, r))
 
                 # Keep up to 3 circles from Hough candidates
-                kept = sorted(kept, key=lambda t: -t[2])[:3]
+                kept = sorted(kept, key=lambda t: -t[2])[:4]
 
                 if len(kept) >= 1:
                     cx1, cy1, r1 = kept[0]
@@ -119,10 +119,9 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
                     for k in range(1, len(kept)):
                         cxk, cyk, rk = kept[k]
                         dist = float(np.hypot(cx1 - cxk, cy1 - cyk))
-                        if dist > 1.3 * min(r1, rk):  # Lower thresh to accept more
+                        if dist > 1.2 * min(r1, rk):  # Lower thresh to accept more
                             circles.append((int(x0 + cxk), int(y0 + cyk), float(rk)))
                     continue
-
             cx, cy = centroids[i]
             r = float(np.sqrt(area / np.pi))
             circles.append((int(cx), int(cy), r))
@@ -134,7 +133,7 @@ def detect_circles_cc_hough(img_bgr, enhanced, mask):
 
     # Remove duplicate detections (same coin detected multiple times)
     before = len(circles)
-    circles = _dedup_circles(circles)
+    circles = _dedup_circles(circles, center_frac=0.3, r_frac=0.3)
     after = len(circles)
 
     print(f"Detected coins (raw): {before}, after dedup: {after}")

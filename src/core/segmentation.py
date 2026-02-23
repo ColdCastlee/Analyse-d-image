@@ -35,8 +35,8 @@ def seg_kmeans_color(img_bgr, k=2):
     _, binary = cv2.threshold(color_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     return binary
 
-def seg_hybrid_adaptive_edge(enhanced, gray, canny_low=50, canny_high=150):
-    adaptive = seg_adaptive(enhanced, block_size=15, C=3)  # Larger block for smoother
+def seg_hybrid_adaptive_edge(enhanced, gray, canny_low=30, canny_high=120): 
+    adaptive = seg_adaptive(enhanced, block_size=21, C=2) 
     edges = cv2.Canny(gray, canny_low, canny_high)
     binary = cv2.bitwise_or(adaptive, edges)
     return binary
