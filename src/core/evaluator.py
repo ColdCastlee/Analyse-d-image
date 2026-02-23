@@ -38,13 +38,10 @@ def run_pipeline_on_image(img_path, cfg):
     debug_dump("00_input", img, cfg, img_path)
 
     gray = to_gray(img)
-    debug_dump("01_gray", gray, cfg, img_path)
 
     blur = denoise(gray, (7, 7), 0)
-    debug_dump("02_blur", blur, cfg, img_path)
 
     enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
-    debug_dump("03_enhanced", enhanced, cfg, img_path)
 
     binary, seg_name = apply_segmentation(cfg["SEG_METHOD_ID"], img, gray, enhanced)
     debug_dump(f"04_binary_{seg_name}", binary, cfg, img_path)

@@ -7,7 +7,7 @@ def seg_otsu(enhanced):
     _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     return binary
 
-def seg_adaptive(enhanced, block_size=11, C=2):
+def seg_adaptive(enhanced, block_size=31, C=1):
     return cv2.adaptiveThreshold(
         enhanced, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -35,6 +35,12 @@ def seg_kmeans_color(img_bgr, k=2):
     _, binary = cv2.threshold(color_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     return binary
 
+def seg_hybrid_adaptive_edge(enhanced, gray, canny_low=30, canny_high=120): 
+    adaptive = seg_adaptive(enhanced, block_size=21, C=2) 
+    edges = cv2.Canny(gray, canny_low, canny_high)
+    binary = cv2.bitwise_or(adaptive, edges)
+    return binary
+
 def apply_segmentation(method_id, img_bgr, gray, enhanced):
     if method_id == 0:
         return seg_otsu(enhanced), "otsu"
@@ -44,4 +50,6 @@ def apply_segmentation(method_id, img_bgr, gray, enhanced):
         return seg_mser(gray), "mser"
     if method_id == 3:
         return seg_kmeans_color(img_bgr), "kmeans_color"
+    if method_id == 4:
+        return seg_hybrid_adaptive_edge(enhanced, gray), "hybrid_adaptive_edge"
     raise ValueError(f"Unknown SEG_METHOD_ID={method_id}. Use 0..3.")

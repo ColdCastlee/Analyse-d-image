@@ -48,7 +48,7 @@ CFG = {
     # 0 = Connected Components + local Hough (robust, default)
     # 1 = Contours + minEnclosingCircle (fast baseline)
     # -----------------------------------------------------
-    "DETECT_METHOD_ID": 0,
+    "DETECT_METHOD_ID": 2,
 
     # -----------------------------------------------------
     # COIN CLASSIFICATION / VALUE ESTIMATION
@@ -81,7 +81,7 @@ CFG = {
     #   "show" -> display images only
     #   "save" -> save images only
     #   "both" -> display and save images
-    "DEBUG_MODE": "none",
+    "DEBUG_MODE": "save",
 
     # Output directory for saved debug images
     "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
@@ -92,7 +92,7 @@ CFG = {
 
 }
 def main():
-    TEAM = None
+    TEAM = "gp1"
     ann = load_annotations(ANN_PATH, team_filter=TEAM)
 
     # -----------------------------------------------------
