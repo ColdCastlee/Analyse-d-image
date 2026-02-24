@@ -14,3 +14,5 @@
 # Ignore text files
 # ===============================
 *.txt
+data/images.zip
+data/*.zip
