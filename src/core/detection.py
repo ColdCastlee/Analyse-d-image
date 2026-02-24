@@ -206,8 +206,8 @@ def detect_circles_dist_localmax(
 
         # --- mask boundary band (stable) ---
         k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        dil = cv2.dilate(local_mask, k_edge, iterations=3)
-        ero = cv2.erode(local_mask,  k_edge, iterations=3)
+        dil = cv2.dilate(local_mask, k_edge, iterations=2)
+        ero = cv2.erode(local_mask,  k_edge, iterations=2)
         band = cv2.subtract(dil, ero)
         band = (band > 0).astype(np.uint8) * 255
 
@@ -278,7 +278,9 @@ def detect_circles_dist_localmax(
 
             # rescue: if overlap very high, allow smaller arc but not zero
             if not (overlap_frac >= 0.75 and arc_support >= 0.10):
-                if arc_support < min_arc:
+                # much softer gate
+                min_arc = 0.10 if overlap_frac >= 0.60 else 0.12
+                if arc_support < min_arc and overlap_frac < 0.78:
                     continue
 
             # Optional extra anti-fake: ring should mostly lie inside blob
@@ -287,7 +289,7 @@ def detect_circles_dist_localmax(
             inside = cv2.countNonZero(cv2.bitwise_and(ring, local_mask))
             total = cv2.countNonZero(ring)
             inside_frac = inside / max(total, 1)
-            if inside_frac < 0.80:
+            if inside_frac < 0.60:
                 continue
 
             score = 0.70 * arc_support + 0.30 * overlap_frac - 0.12 * abs(hr - r_ref) / max(r_ref, 1e-6)
@@ -308,6 +310,9 @@ def detect_circles_dist_localmax(
     filtered_circles = _dedup_concentric_keep_largest(filtered_circles, center_frac=0.18)
     filtered_circles = _dedup_circles(filtered_circles, center_frac=0.42, r_frac=0.28)
     return filtered_circles
+
+
+
 
 def detect_circles_cc_hough(img_bgr, enhanced, mask):
     circles = []
@@ -422,22 +427,274 @@ def detect_circles_contours_min_enclosing(mask, min_radius_px=60):
 
     print("Contours count:", len(contours), "Detected circles:", len(circles), f"(minR={min_radius_px})")
     return circles
+import cv2
+import numpy as np
 
+def _make_border_map(enhanced_u8, mask_u8):
+    """
+    Build a robust 'coin border' map from the image (enhanced),
+    but only near the mask boundary to avoid inner textures.
+    Returns u8 0/255.
+    """
+    m = (mask_u8 > 0).astype(np.uint8) * 255
+
+    k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    # boundary "zone" around mask boundary (thicker to tolerate imperfect mask)
+    dil = cv2.dilate(m, k3, iterations=4)
+    ero = cv2.erode(m, k3, iterations=4)
+    zone = cv2.subtract(dil, ero)               # ring zone around boundary
+    zone = cv2.dilate(zone, k3, iterations=2)   # widen a bit
+
+    # --- gradient magnitude (Scharr) is often more stable than Canny alone ---
+    gx = cv2.Scharr(enhanced_u8, cv2.CV_32F, 1, 0)
+    gy = cv2.Scharr(enhanced_u8, cv2.CV_32F, 0, 1)
+    mag = cv2.magnitude(gx, gy)
+
+    # normalize for thresholding
+    mag_u8 = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    # threshold only inside the zone
+    roi = mag_u8[zone > 0]
+    if roi.size == 0:
+        return np.zeros_like(mag_u8)
+
+    # pick a high percentile => keep strong borders only
+    thr = int(np.percentile(roi, 80))  # 75~90
+    edges_g = (mag_u8 >= thr).astype(np.uint8) * 255
+
+    # combine with a soft Canny (helps thin borders)
+    can = cv2.Canny(enhanced_u8, 30, 90)
+    can = cv2.dilate(can, k3, iterations=1)
+
+    border = cv2.bitwise_or(edges_g, can)
+
+    # gate to zone only (IMPORTANT)
+    border = cv2.bitwise_and(border, zone)
+
+    # cleanup
+    border = cv2.morphologyEx(border, cv2.MORPH_CLOSE, k3, iterations=1)
+    border = cv2.morphologyEx(border, cv2.MORPH_OPEN,  k3, iterations=1)
+    return border
+
+def refine_radius_to_boundary(x, y, r0, m_u8, border_u8, enhanced=None,
+                              grow_max=1.55, step=2,
+                              stop_inside=0.55):
+    """
+    Grow radius from DT-inscribed r0 outward and pick radius that aligns
+    with *image border* (border_u8), not mask band.
+    Returns (best_r, best_border_frac, best_inside_frac).
+    """
+    h, w = m_u8.shape[:2]
+    x = int(x); y = int(y)
+    if x < 0 or x >= w or y < 0 or y >= h:
+        return float(r0), 0.0, 0.0
+
+    r_start = max(6, int(round(r0)))
+    r_end = int(round(r0 * grow_max))
+    if r_end <= r_start:
+        return float(r0), 0.0, 1.0
+
+    best_r = float(r0)
+    best_score = -1e9
+    best_b = 0.0
+    best_in = 0.0
+
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+    for r in range(r_start, r_end + 1, step):
+        ring = np.zeros_like(m_u8, np.uint8)
+        cv2.circle(ring, (x, y), int(r), 255, 2)
+        total = cv2.countNonZero(ring)
+        if total <= 0:
+            continue
+
+        inside = cv2.countNonZero(cv2.bitwise_and(ring, m_u8))
+        inside_frac = inside / total
+
+        # stop when ring is largely outside mask
+        if inside_frac < stop_inside:
+            break
+
+        # border support (from image)
+        hit = cv2.countNonZero(cv2.bitwise_and(ring, border_u8))
+        bfrac = hit / total
+
+        # score: border is the main evidence, inside just sanity
+        score = 3.0 * bfrac + 0.15 * inside_frac + 0.0010 * r
+
+        # weak border => penalize (prevents "random big circle")
+        if bfrac < 0.02:
+            score -= 0.25
+
+        if score > best_score:
+            best_score = score
+            best_r = float(r)
+            best_b = float(bfrac)
+            best_in = float(inside_frac)
+
+    return best_r, best_b, best_in
+
+
+def detect_circles_dt_peaks(mask, enhanced=None,
+                            dist_rel=0.34,
+                            peak_kernel=13,
+                            nms_dist_rel=1.10,
+                            r_min_px=10,
+                            r_max_px=500,
+                            overlap_min=0.70,
+                            refine_grow_max=1.60,
+                            refine_step=2):
+    """
+    DT peaks -> NMS -> overlap gate -> refine radius using IMAGE border map
+    -> quality gate -> NMS-2.
+    """
+
+    # binary 0/255
+    m = (mask > 0).astype(np.uint8) * 255
+
+    # gentle close
+    k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k5, iterations=1)
+
+    # ---- NEW: build border map from image (key fix) ----
+    if enhanced is None:
+        # fallback: border from mask (worse), but keep code safe
+        k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        dil = cv2.dilate(m, k3, iterations=3)
+        ero = cv2.erode(m,  k3, iterations=3)
+        border = cv2.subtract(dil, ero)
+        border = (border > 0).astype(np.uint8) * 255
+    else:
+        border = _make_border_map(enhanced, m)
+
+    # distance transform
+    dist = cv2.distanceTransform((m > 0).astype(np.uint8), cv2.DIST_L2, 5)
+    dmax = float(dist.max())
+    if dmax <= 1e-6:
+        return []
+
+    thr = dist_rel * dmax
+
+    # plateau-safe peaks
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (peak_kernel, peak_kernel))
+    dist_dil = cv2.dilate(dist, k)
+    peak_mask = (dist >= thr) & (dist >= dist_dil - 1e-6)
+    peak_u8 = peak_mask.astype(np.uint8) * 255
+
+    nlab, lab, stats, _ = cv2.connectedComponentsWithStats(peak_u8, connectivity=8)
+
+    candidates = []
+    for i in range(1, nlab):
+        x, y, w, h, _ = stats[i]
+        roi = dist[y:y+h, x:x+w]
+        roi_lab = (lab[y:y+h, x:x+w] == i)
+        if not np.any(roi_lab):
+            continue
+        yy, xx = np.where(roi_lab)
+        vals = roi[yy, xx]
+        j = int(np.argmax(vals))
+        px = int(x + xx[j])
+        py = int(y + yy[j])
+        r0 = float(vals[j])
+        if r_min_px <= r0 <= r_max_px:
+            candidates.append((px, py, r0))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda t: -t[2])  # big r0 first
+
+    picked = []
+    for cx, cy, r0 in candidates:
+        # NMS-1
+        minD = max(10.0, nms_dist_rel * r0)
+        if any((cx-x)**2 + (cy-y)**2 < minD*minD for (x, y, r, sc) in picked):
+            continue
+
+        # overlap gate @ r0
+        circle = np.zeros_like(m, np.uint8)
+        cv2.circle(circle, (int(cx), int(cy)), int(round(r0)), 255, -1)
+        overlap = cv2.countNonZero(cv2.bitwise_and(circle, m))
+        area = float(np.pi * r0 * r0)
+        if area <= 1e-6:
+            continue
+        overlap_frac = overlap / area
+        if overlap_frac < overlap_min:
+            continue
+
+        # --- NEW: require a bit of border support already at r0 ---
+        # Fake "bridge peaks" often have almost no circular border evidence.
+        b0 = _arc_coverage_sample(cx, cy, r0, border, step_deg=10, tol=3)
+        if b0 < 0.02 and overlap_frac < 0.90:
+            continue
+
+        # refine radius using border map
+        r_ref, b_frac, inside_frac = refine_radius_to_boundary(
+            cx, cy, r0,
+            m_u8=m,
+            border_u8=border,
+            enhanced=enhanced,
+            grow_max=refine_grow_max,
+            step=refine_step,
+            stop_inside=0.55
+        )
+        r_ref = float(np.clip(r_ref, r_min_px, r_max_px))
+
+        # ---- HARD quality gate at refined radius (kills extra circles) ----
+        # coin thật: b_frac thường >= 0.04~0.08 (tuỳ ánh sáng)
+        if b_frac < 0.035:
+            continue
+
+        # also kill circles that had to grow too much without border evidence
+        grow_ratio = r_ref / max(r0, 1e-6)
+        if grow_ratio > 1.28 and b_frac < 0.08:
+            continue
+
+        score = 3.0 * b_frac + 0.20 * inside_frac + 0.35 * overlap_frac
+        picked.append((int(cx), int(cy), float(r_ref), float(score)))
+
+    if not picked:
+        return []
+
+    # NMS-2 by score
+    picked.sort(key=lambda t: -t[3])
+    final = []
+    for cx, cy, r, sc in picked:
+        ok = True
+        for fx, fy, fr in final:
+            # stronger suppression: if near an existing circle => drop
+            if (cx-fx)**2 + (cy-fy)**2 < (0.90 * min(r, fr))**2:
+                ok = False
+                break
+        if ok:
+            final.append((cx, cy, r))
+
+    final = _dedup_concentric_keep_largest(final, center_frac=0.22)
+    final = _dedup_circles(final, center_frac=0.60, r_frac=0.35)
+    return final
 
 def detect_circles(method_id, img_bgr, enhanced, mask):
-    """
-    Returns circles as list of (cx, cy, r_px)
-    """
     if method_id == 0:
         return detect_circles_cc_hough(img_bgr, enhanced, mask)
     if method_id == 1:
         return detect_circles_contours_min_enclosing(mask, min_radius_px=60)
-    if method_id == 2: 
+    if method_id == 2:
         return detect_circles_dist_localmax(
             enhanced, mask,
-            min_radius_frac=0.6,        # 0.7 -> 0.6 (bắt thêm peak coin nhỏ)
-            peak_min_dist_frac=1.4,     # 1.8 -> 1.4 (đừng NMS mạnh quá)
-            local_max_size=9,           # 11 -> 9 (tạo thêm local maxima)
-            blur_sigma=2.2              # 3.0 -> 2.2 (đỡ làm bẹt peak)
+            min_radius_frac=0.6,
+            peak_min_dist_frac=1.4,
+            local_max_size=9,
+            blur_sigma=2.2
         )
-    raise ValueError(f"Unknown DETECT_METHOD_ID={method_id}. Use 0..1.")
+    if method_id == 3:
+        return detect_circles_dt_peaks(
+            mask,
+            enhanced=enhanced,
+            dist_rel=0.34,
+            peak_kernel=13,
+            nms_dist_rel=1.10,
+            overlap_min=0.70,
+            refine_grow_max=1.60,
+            refine_step=2
+        )
+    raise ValueError(f"Unknown DETECT_METHOD_ID={method_id}")
