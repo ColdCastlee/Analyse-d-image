@@ -21,7 +21,7 @@ CFG = {
     # 2 = MSER-based region detection
     # 3 = K-means color clustering
     # -----------------------------------------------------
-    "SEG_METHOD_ID": 3,
+    "SEG_METHOD_ID": 4,
 
     # -----------------------------------------------------
     # MORPHOLOGICAL POST-PROCESSING

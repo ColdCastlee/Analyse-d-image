@@ -40,7 +40,7 @@ def run_pipeline_on_image(img_path, cfg):
     gray = to_gray(img)
 
     blur = denoise(gray, (7, 7), 0)
-
+    
     enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
 
     binary, seg_name = apply_segmentation(cfg["SEG_METHOD_ID"], img, gray, enhanced)
