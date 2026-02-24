@@ -24,25 +24,21 @@ def seg_mser(gray):
     binary = cv2.threshold(mask, 0, 255, cv2.THRESH_BINARY_INV)[1]
     return binary
 
-def seg_kmeans_color(img_bgr, k=2):
-    # Normalize lighting using global histogram equalization on LAB lightness channel
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
-    l, a, b = cv2.split(lab)
-    l_eq = cv2.equalizeHist(l)  # Global eq to avoid local halo artifacts
-    lab_eq = cv2.merge((l_eq, a, b))
-    img_eq = cv2.cvtColor(lab_eq, cv2.COLOR_Lab2BGR)
+def seg_kmeans_color(img_bgr, k=3):
+    # Apply light median blur to reduce noise
+    img_blur = cv2.medianBlur(img_bgr, 3)  # Smaller kernel to preserve details
 
-    # Perform k-means on the equalized image
-    pixels = img_eq.reshape(-1, 3).astype(np.float32)
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    # Perform k-means
+    pixels = img_blur.reshape(-1, 3).astype(np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)  # Increase iterations for better convergence
     _, labels, centers = cv2.kmeans(pixels, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
     centers = np.uint8(centers)
 
-    # Determine background cluster (the darker one)
-    centers_gray = np.mean(centers, axis=1)  # Approximate gray value (mean of BGR)
-    background_idx = np.argmin(centers_gray)
+    # Find the largest cluster (background)
+    counts = np.bincount(labels.flatten())
+    background_idx = np.argmax(counts)
 
-    # Create binary mask: foreground=255, background=0
+    # Create binary mask: foreground (all non-background) = 255, background=0
     mask = np.zeros(labels.shape[0], dtype=np.uint8)
     mask[labels.flatten() != background_idx] = 255
     binary = mask.reshape(img_bgr.shape[:2])
