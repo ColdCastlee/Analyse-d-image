@@ -29,6 +29,8 @@ def _draw_circles(img_bgr, circles):
 
 def run_pipeline_on_image(img_path, cfg):
     """
+    PURE HOUGH pipeline:
+      BGR -> gray -> blur -> enhanced -> Hough
     Returns: (pred_count:int, pred_euros:float)
     """
     img = imread_unicode(img_path)
@@ -37,103 +39,83 @@ def run_pipeline_on_image(img_path, cfg):
 
     debug_dump("00_input", img, cfg, img_path)
 
+    # 01) gray
     gray = to_gray(img)
-    debug_dump("01_gray", gray, cfg, img_path)
+    # debug_dump("01_gray", gray, cfg, img_path)
 
+    # 02) blur
     blur = denoise(gray, (7, 7), 0)
-    debug_dump("02_blur", blur, cfg, img_path)
+    # debug_dump("02_blur", blur, cfg, img_path)
 
+    # 03) contrast normalize (CLAHE)
     enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
-    debug_dump("03_enhanced", enhanced, cfg, img_path)
+    # debug_dump("03_enhanced", enhanced, cfg, img_path)
 
-    binary, seg_name = apply_segmentation(cfg["SEG_METHOD_ID"], img, gray, enhanced)
-    debug_dump(f"04_binary_{seg_name}", binary, cfg, img_path)
-
-    mask = apply_morphology(cfg["MORPH_METHOD_ID"], binary, enhanced)
-    debug_dump(f"05_mask_morph{cfg['MORPH_METHOD_ID']}", mask, cfg, img_path)
-
-    if cfg["SEP_METHOD_ID"] == 1:
-        mask = watershed_separate(img, mask, show_debug=False, show_fit=show_fit)
-        debug_dump("06_mask_watershed", mask, cfg, img_path)
-
+    # --- PURE HOUGH: no segmentation / no mask / no watershed ---
+    mask = None
     circles = detect_circles(cfg["DETECT_METHOD_ID"], img, enhanced, mask)
-    debug_dump(f"07_detect_circles_n{len(circles)}", _draw_circles(img, circles), cfg, img_path)
+    debug_dump(f"04_detect_circles_n{len(circles)}", _draw_circles(img, circles), cfg, img_path)
 
     pred_count = int(len(circles))
     if pred_count == 0:
-        # Optional: still dump a "no coins" stage
-        debug_dump("08_no_coins", img, cfg, img_path)
+        debug_dump("05_no_coins", img, cfg, img_path)
         return 0, 0.0
 
-    # ---------------------------------------------------------
-    # 08) Material classification debug (overlay labels)
-    # ---------------------------------------------------------
-    materials = classify_material_adaptive(img, circles)
+    # 05) material classification
+    # materials = classify_material_adaptive(img, circles)
 
-    mat_vis = img.copy()
-    for i, (cx, cy, r) in enumerate(circles):
-        m = materials[i] if i < len(materials) else "unknown"
-        cv2.putText(
-            mat_vis,
-            f"{i}:{m}",
-            (int(cx - r), int(cy - r)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA
-        )
-    debug_dump("08_materials", mat_vis, cfg, img_path)
+    # mat_vis = img.copy()
+    # for i, (cx, cy, r) in enumerate(circles):
+    #     m = materials[i] if i < len(materials) else "unknown"
+    #     cv2.putText(
+    #         mat_vis,
+    #         f"{i}:{m}",
+    #         (int(cx - r), int(cy - r)),
+    #         cv2.FONT_HERSHEY_SIMPLEX,
+    #         0.6,
+    #         (255, 255, 255),
+    #         2,
+    #         cv2.LINE_AA
+    #     )
+    # debug_dump("06_materials", mat_vis, cfg, img_path)
+    total_euros = 0
+    # # 06) value estimation
+    # if cfg["CLASSIFY_METHOD_ID"] == 2:
+    #     # mask is None in pure-hough mode
+    #     _, cents_list, _ = estimate_values(
+    #         cfg["CLASSIFY_METHOD_ID"], img, circles, materials,
+    #         mask_bin_255=None
+    #     )
+    # else:
+    #     _, cents_list, _ = estimate_values(
+    #         cfg["CLASSIFY_METHOD_ID"], img, circles, materials
+    #     )
 
-    # ---------------------------------------------------------
-    # 09) Value estimation debug
-    # ---------------------------------------------------------
-    if cfg["CLASSIFY_METHOD_ID"] == 2:
-        _, cents_list, _ = estimate_values(
-            cfg["CLASSIFY_METHOD_ID"], img, circles, materials,
-            mask_bin_255=mask
-        )
-    else:
-        _, cents_list, _ = estimate_values(
-            cfg["CLASSIFY_METHOD_ID"], img, circles, materials
-        )
+    # total_cents = int(sum(int(v) for v in cents_list))
+    # total_euros = total_cents / 100.0
 
-    total_cents = int(sum(int(v) for v in cents_list))
-    total_euros = total_cents / 100.0
+    # # 07) debug draw values
+    # val_vis = img.copy()
+    # for i, (cx, cy, r) in enumerate(circles):
+    #     v = int(cents_list[i]) if i < len(cents_list) else -1
+    #     text = f"{i}:{v}c"
+    #     x = int(cx - r)
+    #     y = int(cy + r + 30)
 
-    val_vis = img.copy()
-    for i, (cx, cy, r) in enumerate(circles):
-        v = int(cents_list[i]) if i < len(cents_list) else -1
-        text = f"{i}:{v}c"
-        x = int(cx - r)
-        y = int(cy + r + 30)
+    #     (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+    #     cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
+    #     cv2.putText(val_vis, text, (x, y),
+    #                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
 
-        # --- compute text size ---
-        (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+    # total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
+    # (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
+    # cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
+    # cv2.putText(val_vis, total_text, (20, 50),
+    #             cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
 
-        # --- draw background rectangle (black) ---
-        cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
-
-        # --- draw text (white) ---
-        cv2.putText(val_vis, text, (x, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
-
-    # show total on top-left
-    total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
-
-    # --- compute text size ---
-    (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
-
-    # --- draw background rectangle (black) ---
-    cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
-
-    # --- draw text (white) ---
-    cv2.putText(val_vis, total_text, (20, 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
-    debug_dump("09_values", val_vis, cfg, img_path)
+    # debug_dump("07_values", val_vis, cfg, img_path)
 
     return pred_count, total_euros
-
 
 def _safe_float(x, default=0.0):
     try:
@@ -251,7 +233,6 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
     to avoid generating too many images/windows.
     """
     # Hard-disable any debug dumping in batch mode
-    cfg["DEBUG_MODE"] = "none"
 
     def _safe_float_local(x, default=0.0):
         try:
@@ -261,10 +242,16 @@ def evaluate_dataset(images_dir, ann_dict, cfg,
         except Exception:
             return float(default)
 
-    paths = list(iter_image_files(images_dir))
-
-    if team_filter is not None:
-        paths = [p for p in paths if os.sep + team_filter + os.sep in p]
+    # Build image list (optionally only one subfolder like gp8/)
+    if team_filter:
+        subdir = os.path.join(images_dir, team_filter)
+        if os.path.isdir(subdir):
+            paths = list(iter_image_files(subdir))
+        else:
+            print(f"[WARN] team_filter='{team_filter}' but folder not found: {subdir}")
+            paths = []
+    else:
+        paths = list(iter_image_files(images_dir))
 
     paths = sorted(paths)
     if max_items is not None:

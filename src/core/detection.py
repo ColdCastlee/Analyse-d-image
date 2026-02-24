@@ -179,6 +179,209 @@ def detect_circles_contours_min_enclosing(mask, min_radius_px=60):
     print("Contours count:", len(contours), "Detected circles:", len(circles), f"(minR={min_radius_px})")
     return circles
 
+import cv2
+import numpy as np
+
+
+def detect_circles_hough_pure(enhanced,
+                              dp=1.2,
+                              min_dist_frac=0.08,
+                              param1=120,
+                              param2=28,
+                              min_r_frac=0.04,
+                              max_r_frac=0.20,
+                              dedup=True):
+    """
+    PURE HOUGH on preprocessed image (enhanced = gray+blur+CLAHE).
+    No mask, no CC, no DT.
+    """
+
+    if enhanced is None:
+        return []
+
+    h, w = enhanced.shape[:2]
+    min_dim = min(h, w)
+
+    minRadius = max(8, int(min_dim * min_r_frac))
+    maxRadius = max(minRadius + 2, int(min_dim * max_r_frac))
+    minDist = max(12, int(min_dim * min_dist_frac))
+
+    circles = cv2.HoughCircles(
+        enhanced,
+        cv2.HOUGH_GRADIENT,
+        dp=dp,
+        minDist=minDist,
+        param1=param1,
+        param2=param2,
+        minRadius=minRadius,
+        maxRadius=maxRadius
+    )
+
+    if circles is None:
+        return []
+
+    circles = np.round(circles[0]).astype(int)
+    circles = [(int(x), int(y), int(r)) for (x, y, r) in circles]
+
+    if not dedup:
+        return circles
+
+    # ---- concentric + dedup nhẹ (Hough hay bắt inner/outer) ----
+    circles = sorted(circles, key=lambda t: -t[2])  # giữ vòng lớn trước
+    kept = []
+    for (x, y, r) in circles:
+        dup = False
+        for (kx, ky, kr) in kept:
+            if np.hypot(x - kx, y - ky) < 0.20 * min(r, kr):
+                dup = True
+                break
+        if not dup:
+            kept.append((x, y, r))
+
+    return kept
+def detect_circles_hough_dynamic(
+    enhanced,
+    dp=1.2,
+    param1=180,
+    warm_param2=25,
+    warm_min_r_frac=0.020,
+    warm_max_r_frac=0.20,
+    warm_min_dist_frac=0.08,
+    sweep_param2=(30, 35, 40, 45, 50, 55, 60, 65),
+    dedup=True,
+    debug=False
+):
+    """
+    Dynamic PURE HOUGH (per-image auto scale):
+      1) Warmup Hough with low threshold to collect candidates.
+      2) Estimate radius band from candidate radii (percentiles).
+      3) Set minDist based on median radius.
+      4) Sweep param2 and pick a reasonable/stable result.
+
+    Input:
+      enhanced: grayscale preprocessed image (gray+blur+CLAHE)
+    Output:
+      list of circles (cx, cy, r) in pixels
+    """
+    if enhanced is None:
+        return []
+
+    h, w = enhanced.shape[:2]
+    min_dim = min(h, w)
+
+    # -------------------------
+    # 1) Warmup Hough: permissive
+    # -------------------------
+    warm_minR = max(8, int(min_dim * warm_min_r_frac))
+    warm_maxR = max(warm_minR + 2, int(min_dim * warm_max_r_frac))
+    warm_minDist = max(12, int(min_dim * warm_min_dist_frac))
+
+    warm = cv2.HoughCircles(
+        enhanced, cv2.HOUGH_GRADIENT,
+        dp=dp, minDist=warm_minDist,
+        param1=param1, param2=warm_param2,
+        minRadius=warm_minR, maxRadius=warm_maxR
+    )
+
+    if warm is None:
+        return []
+
+    cand = np.round(warm[0]).astype(int)
+    if cand.ndim != 2 or cand.shape[1] < 3:
+        return []
+
+    radii = cand[:, 2].astype(np.float32)
+    radii = radii[radii > 0]
+
+    # if too few candidates -> just dedup warm result
+    circles_warm = [(int(x), int(y), int(r)) for (x, y, r) in cand]
+    circles_warm = _dedup_circles(circles_warm, center_frac=0.30, r_frac=0.22) if dedup else circles_warm
+    if len(radii) < 4:
+        if debug:
+            print("[DYN] few warm candidates -> return warm:", len(circles_warm))
+        return circles_warm
+
+    # -------------------------
+    # 2) Estimate radius band robustly
+    #    (avoid tiny texture circles and huge false rings)
+    # -------------------------
+    r20 = float(np.percentile(radii, 20))
+    r50 = float(np.percentile(radii, 50))
+    r90 = float(np.percentile(radii, 90))
+
+    # Expand slightly, clamp
+    minR = max(8, int(0.80 * r20))
+    maxR = max(minR + 2, int(1.15 * r90))
+
+    # safety clamps vs image size
+    maxR = min(maxR, int(0.30 * min_dim))
+
+    # -------------------------
+    # 3) minDist based on typical radius
+    # -------------------------
+    minDist = int(max(12, 1.10 * r50))
+
+    if debug:
+        print(f"[DYN] warm_n={len(cand)} r20={r20:.1f} r50={r50:.1f} r90={r90:.1f} -> minR={minR} maxR={maxR} minDist={minDist}")
+
+    # -------------------------
+    # 4) Sweep param2 and choose result
+    # Strategy:
+    #   - We don't know GT here, so pick a "stable" count:
+    #     counts usually decrease as param2 increases.
+    #   - We pick the first param2 that doesn't "explode"
+    #     and yields reasonable circles after dedup.
+    # -------------------------
+    best = []
+    best_p2 = None
+
+    prev_n = None
+    for p2 in sweep_param2:
+        c = cv2.HoughCircles(
+            enhanced, cv2.HOUGH_GRADIENT,
+            dp=dp, minDist=minDist,
+            param1=param1, param2=int(p2),
+            minRadius=minR, maxRadius=maxR
+        )
+        if c is None:
+            continue
+
+        circles = np.round(c[0]).astype(int)
+        circles = [(int(x), int(y), int(r)) for (x, y, r) in circles]
+        if dedup:
+            circles = _dedup_circles(circles, center_frac=0.30, r_frac=0.22)
+
+        n = len(circles)
+        if debug:
+            print(f"[DYN] p2={p2:>2} -> n={n}")
+
+        # keep best by heuristic:
+        #  - prefer larger n, but avoid sudden explosion compared to previous step
+        if best_p2 is None:
+            best, best_p2 = circles, p2
+            prev_n = n
+            continue
+
+        # If new n is 0 -> ignore
+        if n == 0:
+            continue
+
+        # Explosion guard: if jumps too much compared to previous, it's likely noise
+        if prev_n is not None and n > prev_n * 1.8 and n - prev_n >= 8:
+            # skip this unstable setting
+            prev_n = n
+            continue
+
+        # Update "best": prefer more circles (recall), tie-break by higher p2 (less noisy)
+        if (n > len(best)) or (n == len(best) and p2 > best_p2):
+            best, best_p2 = circles, p2
+
+        prev_n = n
+
+    if debug:
+        print(f"[DYN] chosen p2={best_p2} n={len(best)}")
+
+    return best
 
 def detect_circles(method_id, img_bgr, enhanced, mask):
     """
@@ -186,6 +389,33 @@ def detect_circles(method_id, img_bgr, enhanced, mask):
     """
     if method_id == 0:
         return detect_circles_cc_hough(img_bgr, enhanced, mask)
+
     if method_id == 1:
         return detect_circles_contours_min_enclosing(mask, min_radius_px=60)
-    raise ValueError(f"Unknown DETECT_METHOD_ID={method_id}. Use 0..1.")
+
+    if method_id == 2:
+        return detect_circles_hough_pure(
+            enhanced,
+            dp=1.3,              # coarser accumulator -> bớt nhạy
+            min_dist_frac=0.19,  # tăng minDist để tránh nhiều vòng gần nhau
+            param1=240,          # edge mạnh hơn -> ít nhiễu nền
+            param2=70,           # QUAN TRỌNG: tăng nữa để giảm circle ảo
+            min_r_frac=0.06,    # bỏ vòng nhỏ (nền/texture)
+            max_r_frac=0.14,     # bỏ vòng quá to (hay là vòng ảo)
+            dedup=True
+        )
+    if method_id == 3:
+        # Dynamic PURE HOUGH (auto scale per image)
+        return detect_circles_hough_dynamic(
+            enhanced,
+            dp=1.2,
+            param1=180,
+            warm_param2=25,
+            warm_min_r_frac=0.020,
+            warm_max_r_frac=0.20,
+            warm_min_dist_frac=0.08,
+            sweep_param2=(30, 35, 40, 45, 50, 55, 60, 65),
+            dedup=True,
+            debug=False
+        )
+    raise ValueError(f"Unknown DETECT_METHOD_ID. Use 0..2.")

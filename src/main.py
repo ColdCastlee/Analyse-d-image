@@ -48,7 +48,7 @@ CFG = {
     # 0 = Connected Components + local Hough (robust, default)
     # 1 = Contours + minEnclosingCircle (fast baseline)
     # -----------------------------------------------------
-    "DETECT_METHOD_ID": 0,
+    "DETECT_METHOD_ID": 2,
 
     # -----------------------------------------------------
     # COIN CLASSIFICATION / VALUE ESTIMATION
@@ -72,7 +72,7 @@ CFG = {
     #          (image visualization / saving is allowed)
     # False -> batch evaluation mode
     #          (DEBUG_MODE will be forced to "none")
-    "RUN_DEBUG_SINGLE": True,
+    "RUN_DEBUG_SINGLE": False,
 
     # Debug output mode
     # Effective ONLY when RUN_DEBUG_SINGLE = True
@@ -81,17 +81,19 @@ CFG = {
     #   "show" -> display images only
     #   "save" -> save images only
     #   "both" -> display and save images
-    "DEBUG_MODE": "both",
+    "DEBUG_MODE": "none",
 
     # Output directory for saved debug images
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp2_3"),
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "3.jpg"),
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp1", "25.png"),
 
 }
 def main():
+    print("test auto pr")
+    team = "gp1"
     ann = load_annotations(ANN_PATH)
 
     # -----------------------------------------------------
@@ -116,13 +118,12 @@ def main():
     # -----------------------------------------------------
     # Force DEBUG_MODE to "none" to avoid excessive
     # visualization or disk usage during batch processing
-    CFG["DEBUG_MODE"] = "none"
 
     evaluate_dataset(
         images_dir=IMAGES_DIR,
         ann_dict=ann,
         cfg=CFG,
-        team_filter=None,
+        team_filter=team,
         tol_count=0,
         tol_euro=0.10,
         max_items=None,
