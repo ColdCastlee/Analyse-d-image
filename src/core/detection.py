@@ -1,5 +1,44 @@
 import cv2
 import numpy as np
+
+def _canny_auto(gray_u8, sigma=0.33):
+    v = float(np.median(gray_u8))
+    lo = int(max(0, (1.0 - sigma) * v))
+    hi = int(min(255, (1.0 + sigma) * v))
+    if hi <= lo + 5:
+        lo = max(0, int(v * 0.5))
+        hi = min(255, int(v * 1.5))
+    return cv2.Canny(gray_u8, lo, hi)
+
+def _arc_coverage_sample(center_x, center_y, r, hit_map_u8, step_deg=6, tol=2):
+    """
+    Estimate how much of the circumference is supported by hit_map (boundary/edges).
+    Returns fraction in [0,1].
+    """
+    h, w = hit_map_u8.shape[:2]
+    cx, cy = float(center_x), float(center_y)
+    r = float(r)
+    if r < 5:
+        return 0.0
+
+    hit = 0
+    total = 0
+    for ang in range(0, 360, step_deg):
+        th = np.deg2rad(ang)
+        x = int(round(cx + r * np.cos(th)))
+        y = int(round(cy + r * np.sin(th)))
+        if x < 0 or x >= w or y < 0 or y >= h:
+            continue
+        total += 1
+
+        # check small neighborhood tolerance
+        x0, x1 = max(0, x - tol), min(w, x + tol + 1)
+        y0, y1 = max(0, y - tol), min(h, y + tol + 1)
+        if np.any(hit_map_u8[y0:y1, x0:x1] > 0):
+            hit += 1
+
+    return hit / max(total, 1)
+
 def _dedup_circles(circles, center_frac=0.35, r_frac=0.25):
     """
     Remove duplicate circle detections (multiple circles for the same coin).
@@ -73,31 +112,44 @@ import cv2
 import numpy as np
 
 
-def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_dist_frac=1.8,
-                                 local_max_size=5, blur_sigma=3.0):  # Tuned: smaller local_max for more peaks in merges; less blur for sharper peaks
+def detect_circles_dist_localmax(
+    enhanced, mask,
+    min_radius_frac=0.5,
+    peak_min_dist_frac=1.8,
+    local_max_size=5,
+    blur_sigma=3.0,
+):
     """
-    Improved: Associate peaks to CC, crop full blob bbox, fit multiple/partial Hough circles per crop, filter by mask overlap for ~1/2+ boundary match.
+    Peaks from distance-transform -> per-CC ROI -> local Hough -> filter by:
+      - center gate to peak
+      - overlap with mask
+      - arc support on (mask boundary band) OR (image edges but ONLY near that band)
+    This reduces "fake circles" from overlap regions / inner textures.
     """
-    # Clean binary (ignore boundaries)
+    # Clean binary
     binary = (mask > 0).astype(np.uint8) * 255
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN,  kernel, iterations=1)
 
-    # Adaptive from clean binary (with labels for later peak association)
+    # CC stats
     num, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
     areas_all = stats[1:, cv2.CC_STAT_AREA].astype(np.float32)
     areas_all = areas_all[areas_all > 5000]
     if len(areas_all) == 0:
         print("No foreground after cleaning")
         return []
+
     r_estimates = np.sqrt(areas_all / np.pi)
     med_r = float(np.median(r_estimates))
     min_radius_px = max(30, min_radius_frac * med_r)
     peak_min_dist_px = max(50, peak_min_dist_frac * med_r)
 
-    print(f"Adaptive: med_r={med_r:.1f} px | min_radius_px={min_radius_px:.1f} | peak_min_dist_px={peak_min_dist_px:.1f} | clean CC={len(areas_all)}")
+    print(
+        f"Adaptive: med_r={med_r:.1f} px | min_radius_px={min_radius_px:.1f} "
+        f"| peak_min_dist_px={peak_min_dist_px:.1f} | clean CC={len(areas_all)}"
+    )
 
     # Distance + blur
     dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
@@ -109,7 +161,6 @@ def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_d
     local_max = (dist == max_filtered)
     ys, xs = np.nonzero(local_max & (dist > min_radius_px))
     print(f"Raw local maxima count: {len(ys)}")
-
     if len(ys) == 0:
         print("No local maxima above min_radius_px")
         return []
@@ -120,20 +171,17 @@ def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_d
     peaks = [peaks[i] for i in sorted_idx]
     values = values[sorted_idx]
 
-    # NMS
+    # NMS on peaks
     kept = []
     for i in range(len(peaks)):
         p = peaks[i]
         v = values[i]
-        if any(np.hypot(p[0]-kp[0], p[1]-kp[1]) < peak_min_dist_px for kp, _ in kept):
+        if any(np.hypot(p[0] - kp[0], p[1] - kp[1]) < peak_min_dist_px for kp, _ in kept):
             continue
         kept.append((p, v))
-
     print(f"Peaks after NMS: {len(kept)}")
 
-    # For each peak: associate to CC, crop full blob bbox, multi-Hough fit on enhanced (partial boundary matching)
     filtered_circles = []
-
     peak_gate = 0.85
     take_topk = 1
 
@@ -155,29 +203,35 @@ def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_d
 
         local_enhanced = enhanced[y0:y1, x0:x1].copy()
         local_mask = binary[y0:y1, x0:x1]
-        # boundary of mask (where real coin edge should lie)
-        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        boundary = cv2.morphologyEx(local_mask, cv2.MORPH_GRADIENT, k_edge)
-        boundary = (boundary > 0).astype(np.uint8) * 255
-        boundary = cv2.dilate(boundary, k_edge, iterations=2)
 
+        # --- mask boundary band (stable) ---
+        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        dil = cv2.dilate(local_mask, k_edge, iterations=3)
+        ero = cv2.erode(local_mask,  k_edge, iterations=3)
+        band = cv2.subtract(dil, ero)
+        band = (band > 0).astype(np.uint8) * 255
+
+        # fill background outside mask to median FG to avoid Hough weirdness
         if np.any(local_mask > 0):
             fg_median = np.median(local_enhanced[local_mask > 0])
             local_enhanced[local_mask == 0] = fg_median
 
         local_blur = cv2.GaussianBlur(local_enhanced, (5, 5), 0)
-        # Edge map from image (more reliable than mask boundary when coins touch)
-        edges = cv2.Canny(local_blur, 60, 140)
-        k_edge2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        edges = cv2.dilate(edges, k_edge2, iterations=1)  # tolerance ~1px
+
+        # --- edges, but only near band to avoid inner textures ---
+        edges = _canny_auto(local_blur, sigma=0.33)
+        edges = cv2.dilate(edges, k_edge, iterations=1)
+        edges_on_band = cv2.bitwise_and(edges, band)
+
+        # radius refs
         area_cc = float(stats[label_id, cv2.CC_STAT_AREA])
-        r_cc = float(np.sqrt(area_cc / np.pi)) 
+        r_cc = float(np.sqrt(area_cc / np.pi))
         cc_ratio = r_cc / max(r_peak, 1e-6)
-        cc_is_single = (cc_ratio < 1.35)   # 1.25..1.45 tùy dataset (1.35 là safe)
+        cc_is_single = (cc_ratio < 1.35)
         r_ref = r_peak if not cc_is_single else max(r_peak, 0.95 * r_cc)
 
         minR = int(max(10, 0.75 * r_ref))
-        maxR = int(1.35 * r_ref)     # nới nhẹ để bắt được outer
+        maxR = int(1.35 * r_ref)
         minDist = int(0.9 * r_ref)
 
         c = cv2.HoughCircles(
@@ -186,8 +240,6 @@ def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_d
             param1=110, param2=28,
             minRadius=minR, maxRadius=maxR
         )
-
-
         if c is None:
             continue
 
@@ -200,38 +252,42 @@ def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_d
 
         cands = []
         for hx, hy, hr in c:
-            # 1) gate theo peak: circle phải gần peak
+            # 1) peak gate
             if np.hypot(hx - pcx, hy - pcy) > peak_gate * r_peak:
                 continue
 
-            # 2) overlap check
+            # 2) overlap gate
             circle_mask = np.zeros(local_mask.shape, np.uint8)
             cv2.circle(circle_mask, (int(hx), int(hy)), int(hr), 255, -1)
             overlap_area = cv2.countNonZero(cv2.bitwise_and(circle_mask, local_mask))
             circle_area = np.pi * hr * hr
             overlap_frac = overlap_area / circle_area if circle_area > 0 else 0.0
-
             if overlap_frac < 0.5:
                 continue
-            # 3) arc-support check (soft): boundary-hit OR edge-hit must be enough
+
+            # 3) arc support: mask-band is primary, edges-on-band is backup
+            arc_m = _arc_coverage_sample(hx, hy, hr, band,         step_deg=6, tol=2)
+            arc_e = _arc_coverage_sample(hx, hy, hr, edges_on_band, step_deg=6, tol=2)
+            arc_support = max(arc_m, 0.85 * arc_e)
+
+            # Soft gate (avoid killing true coins)
+            if cc_is_single:
+                min_arc = 0.12 if overlap_frac >= 0.60 else 0.16
+            else:
+                min_arc = 0.18 if overlap_frac >= 0.62 else 0.22
+
+            # rescue: if overlap very high, allow smaller arc but not zero
+            if not (overlap_frac >= 0.75 and arc_support >= 0.10):
+                if arc_support < min_arc:
+                    continue
+
+            # Optional extra anti-fake: ring should mostly lie inside blob
             ring = np.zeros(local_mask.shape, np.uint8)
             cv2.circle(ring, (int(hx), int(hy)), int(hr), 255, thickness=2)
-
-            ring_area = cv2.countNonZero(ring)
-            if ring_area < 30:
-                continue
-
-            hit_b = cv2.countNonZero(cv2.bitwise_and(ring, boundary))  # mask boundary
-            hit_e = cv2.countNonZero(cv2.bitwise_and(ring, edges))     # image edges
-
-            arc_b = hit_b / ring_area
-            arc_e = hit_e / ring_area
-            arc_support = max(arc_b, arc_e)
-
-            # Soft gate:
-            # - if overlap is high, allow smaller arc (coin may be occluded / boundary broken)
-            min_arc = 0.18 if overlap_frac >= 0.62 else 0.22
-            if arc_support < min_arc:
+            inside = cv2.countNonZero(cv2.bitwise_and(ring, local_mask))
+            total = cv2.countNonZero(ring)
+            inside_frac = inside / max(total, 1)
+            if inside_frac < 0.80:
                 continue
 
             score = 0.70 * arc_support + 0.30 * overlap_frac - 0.12 * abs(hr - r_ref) / max(r_ref, 1e-6)
@@ -242,9 +298,9 @@ def detect_circles_dist_localmax(enhanced, mask, min_radius_frac=0.5, peak_min_d
 
         cands.sort(reverse=True)
         for _, hx, hy, hr in cands[:take_topk]:
+            # promote inner -> outer for 1€/2€ (only when CC looks like single coin)
             if cc_is_single and hr < 0.78 * r_ref:
-                hr2 = hr / 0.65  # promote
-                # clamp để không phình quá: outer không vượt quá 1.35*r_ref
+                hr2 = hr / 0.65
                 hr = float(np.clip(hr2, 0.90 * r_ref, 1.35 * r_ref))
 
             filtered_circles.append((int(x0 + hx), int(y0 + hy), float(hr)))
