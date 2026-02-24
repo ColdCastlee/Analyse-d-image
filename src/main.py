@@ -72,7 +72,7 @@ CFG = {
     #          (image visualization / saving is allowed)
     # False -> batch evaluation mode
     #          (DEBUG_MODE will be forced to "none")
-    "RUN_DEBUG_SINGLE": True,
+    "RUN_DEBUG_SINGLE": False,
 
     # Debug output mode
     # Effective ONLY when RUN_DEBUG_SINGLE = True
@@ -88,7 +88,7 @@ CFG = {
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "3.jpg"),
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "2.jpg"),
 
 }
 def main():
