@@ -63,7 +63,7 @@ CFG = {
     #     -> fallback to mm-based method if matching fails
     #     -> requires reference images in data/ref/
     # -----------------------------------------------------
-    "CLASSIFY_METHOD_ID": 2,
+    "CLASSIFY_METHOD_ID": 1,
 
     # =====================================================
     # RUN MODE (CHOOSE ONE)
@@ -88,7 +88,11 @@ CFG = {
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
+<<<<<<< HEAD
     "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "2.jpg"),
+=======
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "7.jpg"),
+>>>>>>> 0608c28339bff199152985fddc85db97666f3b76
 
 }
 def main():
@@ -126,8 +130,11 @@ def main():
         tol_count=0,
         tol_euro=0.10,
         max_items=None,
-        report_path=os.path.join(ROOT_DIR, "evaluation_report.txt")
+        report_path=os.path.join(ROOT_DIR, "evaluation_report.txt"),
     )
+    print("[CFG]", {k: CFG[k] for k in
+                    ["SEG_METHOD_ID", "MORPH_METHOD_ID", "SEP_METHOD_ID", "DETECT_METHOD_ID", "CLASSIFY_METHOD_ID",
+                     "RUN_DEBUG_SINGLE", "DEBUG_MODE"]}),
 
 if __name__ == "__main__":
     main()
