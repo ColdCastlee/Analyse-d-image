@@ -16,3 +16,10 @@
 *.txt
 data/images.zip
 data/*.zip
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
