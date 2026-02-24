@@ -84,15 +84,15 @@ CFG = {
     "DEBUG_MODE": "both",
 
     # Output directory for saved debug images
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
-
-    # Image path for single-image debug
-    # Used ONLY when RUN_DEBUG_SINGLE = True
-<<<<<<< HEAD
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "2.jpg"),
-=======
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "7.jpg"),
->>>>>>> 0608c28339bff199152985fddc85db97666f3b76
+#     "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
+#
+#     # Image path for single-image debug
+#     # Used ONLY when RUN_DEBUG_SINGLE = True
+# <<<<<<< HEAD
+#     "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "2.jpg"),
+# =======
+#     "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp4", "7.jpg"),
+# >>>>>>> 0608c28339bff199152985fddc85db97666f3b76
 
 }
 def main():
