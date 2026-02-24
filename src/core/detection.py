@@ -290,12 +290,23 @@ def detect_circles_hough_dynamic(
     if cand.ndim != 2 or cand.shape[1] < 3:
         return []
 
+    # --- radii from warm candidates ---
     radii = cand[:, 2].astype(np.float32)
     radii = radii[radii > 0]
 
-    # if too few candidates -> just dedup warm result
+    # ---- filter radii by density ----
+    if len(radii) >= 4:
+        hist, bin_edges = np.histogram(radii, bins=12)
+        best_bin = int(np.argmax(hist))
+        r_lo = float(bin_edges[best_bin])
+        r_hi = float(bin_edges[best_bin + 1])
+        radii = radii[(radii >= r_lo * 0.85) & (radii <= r_hi * 1.15)]
+
+    # ---- fallback: if too few candidates after filtering ----
     circles_warm = [(int(x), int(y), int(r)) for (x, y, r) in cand]
-    circles_warm = _dedup_circles(circles_warm, center_frac=0.30, r_frac=0.22) if dedup else circles_warm
+    if dedup:
+        circles_warm = _dedup_circles(circles_warm, center_frac=0.30, r_frac=0.22)
+
     if len(radii) < 4:
         if debug:
             print("[DYN] few warm candidates -> return warm:", len(circles_warm))
@@ -319,23 +330,25 @@ def detect_circles_hough_dynamic(
     # -------------------------
     # 3) minDist based on typical radius
     # -------------------------
-    minDist = int(max(12, 1.10 * r50))
+    minDist = int(max(14, 1.35 * r50))
 
     if debug:
         print(f"[DYN] warm_n={len(cand)} r20={r20:.1f} r50={r50:.1f} r90={r90:.1f} -> minR={minR} maxR={maxR} minDist={minDist}")
 
     # -------------------------
-    # 4) Sweep param2 and choose result
-    # Strategy:
-    #   - We don't know GT here, so pick a "stable" count:
-    #     counts usually decrease as param2 increases.
-    #   - We pick the first param2 that doesn't "explode"
-    #     and yields reasonable circles after dedup.
+    # 4) Sweep param2 and choose result (scoring)
     # -------------------------
+    def score(cs):
+        if len(cs) == 0:
+            return -1e9
+        rs = np.array([c[2] for c in cs], np.float32)
+        return float(len(rs) - 0.8 * np.std(rs))  # many + consistent radii
+
     best = []
     best_p2 = None
-
+    best_score = -1e9
     prev_n = None
+
     for p2 in sweep_param2:
         c = cv2.HoughCircles(
             enhanced, cv2.HOUGH_GRADIENT,
@@ -355,34 +368,22 @@ def detect_circles_hough_dynamic(
         if debug:
             print(f"[DYN] p2={p2:>2} -> n={n}")
 
-        # keep best by heuristic:
-        #  - prefer larger n, but avoid sudden explosion compared to previous step
-        if best_p2 is None:
-            best, best_p2 = circles, p2
+        # Explosion guard (optional but helpful)
+        if prev_n is not None and n > prev_n * 1.8 and (n - prev_n) >= 8:
             prev_n = n
             continue
-
-        # If new n is 0 -> ignore
-        if n == 0:
-            continue
-
-        # Explosion guard: if jumps too much compared to previous, it's likely noise
-        if prev_n is not None and n > prev_n * 1.8 and n - prev_n >= 8:
-            # skip this unstable setting
-            prev_n = n
-            continue
-
-        # Update "best": prefer more circles (recall), tie-break by higher p2 (less noisy)
-        if (n > len(best)) or (n == len(best) and p2 > best_p2):
-            best, best_p2 = circles, p2
-
         prev_n = n
 
+        s = score(circles)
+        if s > best_score:
+            best_score = s
+            best = circles
+            best_p2 = p2
+
     if debug:
-        print(f"[DYN] chosen p2={best_p2} n={len(best)}")
+        print(f"[DYN] chosen p2={best_p2} score={best_score:.2f} n={len(best)}")
 
     return best
-
 def detect_circles(method_id, img_bgr, enhanced, mask):
     """
     Returns circles as list of (cx, cy, r_px)
@@ -396,12 +397,12 @@ def detect_circles(method_id, img_bgr, enhanced, mask):
     if method_id == 2:
         return detect_circles_hough_pure(
             enhanced,
-            dp=1.3,              # coarser accumulator -> bớt nhạy
-            min_dist_frac=0.19,  # tăng minDist để tránh nhiều vòng gần nhau
-            param1=240,          # edge mạnh hơn -> ít nhiễu nền
-            param2=70,           # QUAN TRỌNG: tăng nữa để giảm circle ảo
-            min_r_frac=0.06,    # bỏ vòng nhỏ (nền/texture)
-            max_r_frac=0.14,     # bỏ vòng quá to (hay là vòng ảo)
+            dp=1.1,              # coarser accumulator -> bớt nhạy
+            min_dist_frac=0.15,  # tăng minDist để tránh nhiều vòng gần nhau
+            param1=200,          # edge mạnh hơn -> ít nhiễu nền
+            param2=60,           # QUAN TRỌNG: tăng nữa để giảm circle ảo
+            min_r_frac=0.035,    # bỏ vòng nhỏ (nền/texture)
+            max_r_frac=0.13,     # bỏ vòng quá to (hay là vòng ảo)
             dedup=True
         )
     if method_id == 3:
@@ -410,10 +411,10 @@ def detect_circles(method_id, img_bgr, enhanced, mask):
             enhanced,
             dp=1.2,
             param1=180,
-            warm_param2=25,
-            warm_min_r_frac=0.020,
-            warm_max_r_frac=0.20,
-            warm_min_dist_frac=0.08,
+            warm_param2=35,
+            warm_min_r_frac=0.035,
+            warm_max_r_frac=0.18,
+            warm_min_dist_frac=0.10,
             sweep_param2=(30, 35, 40, 45, 50, 55, 60, 65),
             dedup=True,
             debug=False

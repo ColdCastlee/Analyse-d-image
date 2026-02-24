@@ -63,7 +63,7 @@ CFG = {
     #     -> fallback to mm-based method if matching fails
     #     -> requires reference images in data/ref/
     # -----------------------------------------------------
-    "CLASSIFY_METHOD_ID": 2,
+    "CLASSIFY_METHOD_ID": 3,
 
     # =====================================================
     # RUN MODE (CHOOSE ONE)
@@ -84,7 +84,7 @@ CFG = {
     "DEBUG_MODE": "none",
 
     # Output directory for saved debug images
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp2_3"),
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp5_3"),
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
@@ -92,8 +92,7 @@ CFG = {
 
 }
 def main():
-    print("test auto pr")
-    team = "gp1"
+    team = None
     ann = load_annotations(ANN_PATH)
 
     # -----------------------------------------------------
