@@ -81,10 +81,10 @@ CFG = {
     #   "show" -> display images only
     #   "save" -> save images only
     #   "both" -> display and save images
-    "DEBUG_MODE": "none",
+    "DEBUG_MODE": "save",
 
     # Output directory for saved debug images
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp5_3"),
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp5_4"),
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True
@@ -92,7 +92,7 @@ CFG = {
 
 }
 def main():
-    team = None
+    team = "gp1"
     ann = load_annotations(ANN_PATH)
 
     # -----------------------------------------------------

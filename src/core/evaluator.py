@@ -1,13 +1,8 @@
 import math
 import cv2
 import os
-
+import numpy as np
 from core.io_utils import imread_unicode, show_fit, debug_dump
-from core.preprocess import to_gray, denoise, enhance_contrast
-from core.segmentation import apply_segmentation
-from core.morphology import apply_morphology
-from core.separation import watershed_separate
-from core.detection import detect_circles
 from core.classification import classify_material_adaptive, estimate_values
 
 from core.data_loader import iter_image_files, basename_only
@@ -26,6 +21,73 @@ def _draw_circles(img_bgr, circles):
         cv2.circle(out, (int(cx), int(cy)), int(round(r)), (0, 255, 0), 2)
         cv2.circle(out, (int(cx), int(cy)), 2, (0, 0, 255), -1)
     return out
+
+def to_gray(img_bgr):
+    return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+def denoise(gray, ksize=(7, 7), sigma=0):
+    return cv2.GaussianBlur(gray, ksize, sigma)
+
+def enhance_contrast(gray_blur, clip=2.0, grid=(8, 8)):
+    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=grid)
+    return clahe.apply(gray_blur)
+
+
+def detect_circles_hough_pure(enhanced,
+                              dp=1.2,
+                              min_dist_frac=0.08,
+                              param1=120,
+                              param2=28,
+                              min_r_frac=0.04,
+                              max_r_frac=0.20,
+                              dedup=True):
+    """
+    PURE HOUGH on preprocessed image (enhanced = gray+blur+CLAHE).
+    No mask, no CC, no DT.
+    """
+
+    if enhanced is None:
+        return []
+
+    h, w = enhanced.shape[:2]
+    min_dim = min(h, w)
+
+    minRadius = max(8, int(min_dim * min_r_frac))
+    maxRadius = max(minRadius + 2, int(min_dim * max_r_frac))
+    minDist = max(12, int(min_dim * min_dist_frac))
+
+    circles = cv2.HoughCircles(
+        enhanced,
+        cv2.HOUGH_GRADIENT,
+        dp=dp,
+        minDist=minDist,
+        param1=param1,
+        param2=param2,
+        minRadius=minRadius,
+        maxRadius=maxRadius
+    )
+
+    if circles is None:
+        return []
+
+    circles = np.round(circles[0]).astype(int)
+    circles = [(int(x), int(y), int(r)) for (x, y, r) in circles]
+
+    if not dedup:
+        return circles
+
+    circles = sorted(circles, key=lambda t: -t[2])  
+    kept = []
+    for (x, y, r) in circles:
+        dup = False
+        for (kx, ky, kr) in kept:
+            if np.hypot(x - kx, y - ky) < 0.20 * min(r, kr):
+                dup = True
+                break
+        if not dup:
+            kept.append((x, y, r))
+
+    return kept
 
 def run_pipeline_on_image(img_path, cfg):
     """
@@ -51,9 +113,16 @@ def run_pipeline_on_image(img_path, cfg):
     enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
     # debug_dump("03_enhanced", enhanced, cfg, img_path)
 
-    # --- PURE HOUGH: no segmentation / no mask / no watershed ---
-    mask = None
-    circles = detect_circles(cfg["DETECT_METHOD_ID"], img, enhanced, mask)
+    circles = detect_circles_hough_pure(
+            enhanced,
+            dp=1.1,              # coarser accumulator -> bớt nhạy
+            min_dist_frac=0.15,  # tăng minDist để tránh nhiều vòng gần nhau
+            param1=200,          # edge mạnh hơn -> ít nhiễu nền
+            param2=60,           # QUAN TRỌNG: tăng nữa để giảm circle ảo
+            min_r_frac=0.035,    # bỏ vòng nhỏ (nền/texture)
+            max_r_frac=0.13,     # bỏ vòng quá to (hay là vòng ảo)
+            dedup=True
+        )
     debug_dump(f"04_detect_circles_n{len(circles)}", _draw_circles(img, circles), cfg, img_path)
 
     pred_count = int(len(circles))
@@ -62,58 +131,58 @@ def run_pipeline_on_image(img_path, cfg):
         return 0, 0.0
 
     # 05) material classification
-    # materials = classify_material_adaptive(img, circles)
+    materials = classify_material_adaptive(img, circles)
 
-    # mat_vis = img.copy()
-    # for i, (cx, cy, r) in enumerate(circles):
-    #     m = materials[i] if i < len(materials) else "unknown"
-    #     cv2.putText(
-    #         mat_vis,
-    #         f"{i}:{m}",
-    #         (int(cx - r), int(cy - r)),
-    #         cv2.FONT_HERSHEY_SIMPLEX,
-    #         0.6,
-    #         (255, 255, 255),
-    #         2,
-    #         cv2.LINE_AA
-    #     )
-    # debug_dump("06_materials", mat_vis, cfg, img_path)
+    mat_vis = img.copy()
+    for i, (cx, cy, r) in enumerate(circles):
+        m = materials[i] if i < len(materials) else "unknown"
+        cv2.putText(
+            mat_vis,
+            f"{i}:{m}",
+            (int(cx - r), int(cy - r)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
+    debug_dump("06_materials", mat_vis, cfg, img_path)
     total_euros = 0
-    # # 06) value estimation
-    # if cfg["CLASSIFY_METHOD_ID"] == 2:
-    #     # mask is None in pure-hough mode
-    #     _, cents_list, _ = estimate_values(
-    #         cfg["CLASSIFY_METHOD_ID"], img, circles, materials,
-    #         mask_bin_255=None
-    #     )
-    # else:
-    #     _, cents_list, _ = estimate_values(
-    #         cfg["CLASSIFY_METHOD_ID"], img, circles, materials
-    #     )
+    # 06) value estimation
+    if cfg["CLASSIFY_METHOD_ID"] == 2:
+        # mask is None in pure-hough mode
+        _, cents_list, _ = estimate_values(
+            cfg["CLASSIFY_METHOD_ID"], img, circles, materials,
+            mask_bin_255=None
+        )
+    else:
+        _, cents_list, _ = estimate_values(
+            cfg["CLASSIFY_METHOD_ID"], img, circles, materials
+        )
 
-    # total_cents = int(sum(int(v) for v in cents_list))
-    # total_euros = total_cents / 100.0
+    total_cents = int(sum(int(v) for v in cents_list))
+    total_euros = total_cents / 100.0
 
-    # # 07) debug draw values
-    # val_vis = img.copy()
-    # for i, (cx, cy, r) in enumerate(circles):
-    #     v = int(cents_list[i]) if i < len(cents_list) else -1
-    #     text = f"{i}:{v}c"
-    #     x = int(cx - r)
-    #     y = int(cy + r + 30)
+    # 07) debug draw values
+    val_vis = img.copy()
+    for i, (cx, cy, r) in enumerate(circles):
+        v = int(cents_list[i]) if i < len(cents_list) else -1
+        text = f"{i}:{v}c"
+        x = int(cx - r)
+        y = int(cy + r + 30)
 
-    #     (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
-    #     cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
-    #     cv2.putText(val_vis, text, (x, y),
-    #                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+        (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+        cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
+        cv2.putText(val_vis, text, (x, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
 
-    # total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
-    # (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
-    # cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
-    # cv2.putText(val_vis, total_text, (20, 50),
-    #             cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
+    total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
+    (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
+    cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
+    cv2.putText(val_vis, total_text, (20, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
 
-    # debug_dump("07_values", val_vis, cfg, img_path)
+    debug_dump("07_values", val_vis, cfg, img_path)
 
     return pred_count, total_euros
 
