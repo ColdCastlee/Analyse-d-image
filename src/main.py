@@ -34,7 +34,7 @@ CFG = {
     # 6 = Median filter on closed mask (recommended)
     # 7 = Majority filter
     # -----------------------------------------------------
-    "MORPH_METHOD_ID": 6,
+    "MORPH_METHOD_ID": 3,
 
     # -----------------------------------------------------
     # SEPARATION (for overlapping coins)
