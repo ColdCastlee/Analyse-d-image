@@ -2,7 +2,7 @@
 import os
 import pandas as pd
 import numpy as np
-from test import predict_image
+from test_evaluate import predict_image
 import cv2 as cv
 
 euro_ratios = {
