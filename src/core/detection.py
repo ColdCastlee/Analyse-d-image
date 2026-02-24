@@ -114,6 +114,8 @@ def detect_circles_dist_localmax(mask, min_radius_frac=0.5, peak_min_dist_frac=1
     # Circularity on clean binary (crop)
     filtered_circles = []
     for (cx, cy), r in kept:
+        if not np.isfinite(r) or r <= 0:
+            continue
         pad = int(2.0 * r)
         x0, y0 = max(0, cx - pad), max(0, cy - pad)
         x1, y1 = min(binary.shape[1], cx + pad), min(binary.shape[0], cy + pad)

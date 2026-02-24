@@ -25,14 +25,28 @@ def seg_mser(gray):
     return binary
 
 def seg_kmeans_color(img_bgr, k=2):
-    pixels = img_bgr.reshape(-1, 3).astype(np.float32)
+    # Normalize lighting using global histogram equalization on LAB lightness channel
+    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2Lab)
+    l, a, b = cv2.split(lab)
+    l_eq = cv2.equalizeHist(l)  # Global eq to avoid local halo artifacts
+    lab_eq = cv2.merge((l_eq, a, b))
+    img_eq = cv2.cvtColor(lab_eq, cv2.COLOR_Lab2BGR)
+
+    # Perform k-means on the equalized image
+    pixels = img_eq.reshape(-1, 3).astype(np.float32)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
     _, labels, centers = cv2.kmeans(pixels, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
     centers = np.uint8(centers)
-    segmented = centers[labels.flatten()].reshape(img_bgr.shape)
 
-    color_gray = cv2.cvtColor(segmented, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(color_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Determine background cluster (the darker one)
+    centers_gray = np.mean(centers, axis=1)  # Approximate gray value (mean of BGR)
+    background_idx = np.argmin(centers_gray)
+
+    # Create binary mask: foreground=255, background=0
+    mask = np.zeros(labels.shape[0], dtype=np.uint8)
+    mask[labels.flatten() != background_idx] = 255
+    binary = mask.reshape(img_bgr.shape[:2])
+
     return binary
 
 def seg_hybrid_adaptive_edge(enhanced, gray, canny_low=30, canny_high=120): 
