@@ -154,7 +154,70 @@ def bimetal_type_1e_or_2e(img_bgr, cx, cy, r_px):
     b_outer = float(np.median(B[outer]))
     b_inner = float(np.median(B[inner]))
     return 100 if (b_outer - b_inner) > 3 else 200
+def estimate_values_by_px_ranking(circles, materials):
+    """
+    Fallback when no bimetal anchor is available.
+    Use pixel diameter ranking inside each material group:
+      - Sort coins by diameter (px)
+      - Map smallest->smallest denom in allowed group, etc.
+    Returns: (diam_px, cents_list)
+    """
+    if circles is None or len(circles) == 0:
+        return np.array([], dtype=np.float32), []
 
+    diam_px = np.array([2.0 * float(r) for (_, _, r) in circles], dtype=np.float32)
+    values_list = [None] * len(circles)
+
+    if materials is None or len(materials) != len(circles):
+        materials = ["unknown"] * len(circles)
+
+    # group indices by material
+    idx_copper = [i for i, mat in enumerate(materials) if mat == "copper"]
+    idx_gold = [i for i, mat in enumerate(materials) if mat == "gold"]
+    idx_bimetal = [i for i, mat in enumerate(materials) if mat == "bimetal"]
+    idx_unknown = [i for i, mat in enumerate(materials) if mat not in ("copper", "gold", "bimetal")]
+
+    # NOTE: we cannot decide 1€ vs 2€ without anchor -> map bimetal by size ranking (100<200)
+    # We'll still rank them: smaller->1€, larger->2€
+    def _assign_rank_px(idxs, allowed_values):
+        if not idxs:
+            return
+        idxs_sorted = sorted(idxs, key=lambda i: float(diam_px[i]))
+        allowed_sorted = sorted(allowed_values, key=lambda v: COINS_DIAM_MM[v])  # order by real mm
+        n = len(idxs_sorted)
+        m = len(allowed_sorted)
+        k = min(n, m)
+        for j in range(k):
+            values_list[idxs_sorted[j]] = int(allowed_sorted[j])
+        if n > m:
+            # extra coins -> nearest by absolute px (rough)
+            for j in range(m, n):
+                ii = idxs_sorted[j]
+                # choose closest denom by relative position (best-effort)
+                values_list[ii] = int(allowed_sorted[-1])
+
+    _assign_rank_px(idx_copper, MAT_GROUPS["copper"])
+    _assign_rank_px(idx_gold, MAT_GROUPS["gold"])
+
+    # bimetal: rank -> 100 then 200 (if many, nearest by rank)
+    if idx_bimetal:
+        idxs_sorted = sorted(idx_bimetal, key=lambda i: float(diam_px[i]))
+        # smaller bimetal -> 1€, larger -> 2€
+        for j, ii in enumerate(idxs_sorted):
+            values_list[ii] = 100 if j == 0 else 200
+
+    # unknown: nearest by global ranking across all denoms
+    for i in idx_unknown:
+        # pick denom whose mm rank best matches px rank globally (simple nearest by normalized position)
+        # fallback simpler: choose nearest by comparing to median group sizes is unreliable -> use 10c as neutral
+        values_list[i] = 10
+
+    # fill any None
+    for i, v in enumerate(values_list):
+        if v is None:
+            values_list[i] = 10
+
+    return diam_px, [int(v) for v in values_list]
 
 def assign_by_ranking(d_mm, values_list, idxs, allowed_values):
     if len(idxs) == 0:
@@ -175,63 +238,105 @@ def assign_by_ranking(d_mm, values_list, idxs, allowed_values):
             ii = idxs_sorted[j]
             values_list[ii] = int(min(allowed_sorted, key=lambda v: abs(COINS_DIAM_MM[v] - float(d_mm[ii]))))
 
+COIN_DMM = np.array(list(COINS_DIAM_MM.values()), dtype=np.float32)
 
-def estimate_values_by_bimetal_mm(img_bgr, circles, materials):
+def _fit_residual(d_mm):
+    # khoảng cách tới coin gần nhất (mm)
+    return float(np.mean([np.min(np.abs(COIN_DMM - float(x))) for x in d_mm]))
+
+def choose_anchor_scale(diam_px, anchor_idx):
+    # thử cả 1€ và 2€
+    candidates = []
+    for typ in (100, 200):
+        scale = float(diam_px[anchor_idx] / COINS_DIAM_MM[typ])
+        d_mm = diam_px / scale
+        res = _fit_residual(d_mm)
+        candidates.append((res, typ, scale))
+    candidates.sort(key=lambda t: t[0])
+    return candidates[0]  # (best_res, best_type, best_scale)
+
+def estimate_scale_from_all_coins(diam_px, s_min=1.0, s_max=60.0, steps=800):
+    # grid search scale, chọn scale có residual nhỏ nhất
+    best = None
+    for s in np.linspace(s_min, s_max, steps):
+        d_mm = diam_px / s
+        # residual: median khoảng cách tới coin gần nhất
+        errs = [min(abs(float(dm) - COINS_DIAM_MM[v]) for v in COINS_DIAM_MM) for dm in d_mm]
+        res = float(np.median(errs))
+        if best is None or res < best[0]:
+            best = (res, float(s))
+    return best  # (residual_mm, scale_px_per_mm)
+
+def nearest_by_diameter(d_mm):
+    return min(COINS_DIAM_MM.keys(), key=lambda v: abs(COINS_DIAM_MM[v] - float(d_mm)))
+
+def choose_value_soft(d_mm, mat, lam=1.2):
+    allowed = set(MAT_GROUPS.get(mat, MAT_GROUPS["unknown"]))
+    best_v, best_s = None, 1e9
+    for v in COINS_DIAM_MM:
+        s = abs(float(d_mm) - COINS_DIAM_MM[v]) + (0.0 if v in allowed else lam)
+        if s < best_s:
+            best_s, best_v = s, v
+    return int(best_v)
+
+def scale_sanity(d_mm):
+    ok = [(14.0 <= float(x) <= 28.0) for x in d_mm]
+    return sum(ok) / max(len(ok), 1)
+
+# if sanity < 0.7: refit scale using all coins
+
+def estimate_values_by_bimetal_mm(img_bgr, circles, materials,
+                                 sanity_th=0.70, anchor_res_th=0.90):
     """
-    Your original: anchor scale with bimetal -> mm -> match by groups.
-    Returns: d_mm, values_list(cents), scale(px/mm)
+    Robust baseline:
+      - If bimetal exists: choose anchor scale by residual-fit (try 1€ vs 2€)
+      - If anchor is bad OR no bimetal: fit scale from all coins
+      - Assign denom by nearest diameter with soft material penalty
+    Returns: d_mm, cents_list, scale(px/mm)
     """
+    if circles is None or len(circles) == 0:
+        return np.array([], dtype=np.float32), [], None
+
     diam_px = np.array([2.0 * float(r) for (_, _, r) in circles], dtype=np.float32)
 
+    # normalize materials length
+    if materials is None or len(materials) != len(circles):
+        materials = ["unknown"] * len(circles)
+
+    # ---- A) Try anchor by bimetal (if any) using residual-fit (NOT bimetal_type hard decision)
+    scale = None
+    d_mm = None
+    used = "NONE"
+
     bimetal_idxs = [i for i, m in enumerate(materials) if m == "bimetal"]
-    if len(bimetal_idxs) == 0:
-        raise RuntimeError("No bimetal coin detected → cannot anchor scale")
+    if len(bimetal_idxs) > 0:
+        bi = max(bimetal_idxs, key=lambda i: float(diam_px[i]))
+        best_res, coin_type, scale_try = choose_anchor_scale(diam_px, bi)
+        d_mm_try = diam_px / scale_try
+        sanity = scale_sanity(d_mm_try)
 
-    bi = max(bimetal_idxs, key=lambda i: diam_px[i])
-    cx, cy, r = circles[bi]
-    coin_type = bimetal_type_1e_or_2e(img_bgr, cx, cy, r)
+        # accept anchor only if it makes sense
+        if (sanity >= sanity_th) and (best_res <= anchor_res_th):
+            scale = float(scale_try)
+            d_mm = d_mm_try
+            used = f"ANCHOR(type={coin_type},res={best_res:.3f},sanity={sanity:.2f})"
+        else:
+            print(f"[ANCHOR_REJECT] idx={bi} type={coin_type} scale={scale_try:.4f} "
+                  f"res={best_res:.3f} sanity={sanity:.2f} -> will refit all-coins")
 
-    scale = float(diam_px[bi] / COINS_DIAM_MM[coin_type])  # px/mm
-    print(f"[ANCHOR] coin index={bi}, type={coin_type}, scale(px/mm)={scale:.4f}")
+    # ---- B) If no good anchor -> fit scale from all coins
+    if scale is None:
+        res_all, scale_all = estimate_scale_from_all_coins(diam_px)
+        scale = float(scale_all)
+        d_mm = diam_px / scale
+        used = f"ALL_COINS(res={res_all:.3f})"
 
-    d_mm = diam_px / scale
-    values_list = [None] * len(circles)
+    print(f"[BASELINE_SCALE] {used} scale(px/mm)={scale:.4f}")
 
-    # --- material correction using measured diameter (mm) ---
-    # Copper coins are only 1/2/5 cents (max diameter ~21.25mm)
-    # Gold coins are 10/20/50 cents (diameters >=19.75mm, 50c=24.25mm)
-    materials = list(materials)
+    # ---- C) Assign values using soft constraint by material + diameter
+    cents_list = [choose_value_soft(d_mm[i], materials[i]) for i in range(len(circles))]
 
-    for i in range(len(materials)):
-        di = float(d_mm[i])
-        mi = materials[i]
-
-        # If classified as copper but diameter is too large -> must be gold
-        if mi == "copper" and di > 21.6:
-            materials[i] = "gold"
-
-        # (Optional) If classified as gold but diameter is very small -> likely copper
-        if mi == "gold" and di < 18.8:
-            materials[i] = "copper"
-
-    idx_copper = [i for i, mat in enumerate(materials) if mat == "copper"]
-    idx_gold = [i for i, mat in enumerate(materials) if mat == "gold"]
-    idx_bimetal = [i for i, mat in enumerate(materials) if mat == "bimetal"]
-    idx_unknown = [i for i, mat in enumerate(materials) if mat not in ("copper", "gold", "bimetal")]
-
-    assign_by_ranking(d_mm, values_list, idx_copper, MAT_GROUPS["copper"])
-    assign_by_ranking(d_mm, values_list, idx_gold, MAT_GROUPS["gold"])
-
-    for i in idx_bimetal:
-        cx, cy, r = circles[i]
-        values_list[i] = int(bimetal_type_1e_or_2e(img_bgr, cx, cy, r))
-
-    for i in idx_unknown:
-        v = min(COINS_DIAM_MM.keys(), key=lambda k: abs(COINS_DIAM_MM[k] - float(d_mm[i])))
-        values_list[i] = int(v)
-
-    values_list = [int(v) for v in values_list]
-    return d_mm, values_list, scale
+    return d_mm, [int(v) for v in cents_list], scale
 
 def enforce_material_constraints(material, cents_pred):
     """
@@ -292,60 +397,70 @@ def _auto_mask_from_circles(shape_hw, circles):
 def estimate_values_by_matching_with_fallback(img_bgr, circles, materials, mask_bin_255,
                                               score_th=18, area_tol=0.35):
     """
-    Try matching each detected coin against REF_DIR (front-side refs).
-    If matching is unreliable -> fallback to bimetal-mm (method 0) result.
-    Returns: d_mm (from mm method), cents_final, scale (from mm method)
+    Try ORB matching per coin. If matching is unreliable -> fallback to:
+      - bimetal-mm baseline (if anchor exists)
+      - otherwise px-ranking baseline (no anchor)
+    Returns: d_mm_or_None, cents_final, scale_or_None
     """
 
-    # 1) Fallback baseline (bimetal-mm)
-    d_mm, cents_mm, scale = estimate_values_by_bimetal_mm(img_bgr, circles, materials)
+    if circles is None or len(circles) == 0:
+        return None, [], None
 
-    # 2) Load ref DB once
+    # --- 1) Build a baseline that NEVER crashes ---
+    d_mm = None
+    scale = None
+    cents_baseline = None
+
+    try:
+        d_mm, cents_baseline, scale = estimate_values_by_bimetal_mm(img_bgr, circles, materials)
+        print(f"[BASELINE] using robust-mm (scale={scale:.4f})")
+    except Exception as e:
+        # should almost never happen now
+        _, cents_px = estimate_values_by_px_ranking(circles, materials)
+        d_mm, scale = None, None
+        cents_baseline = cents_px
+        print(f"[BASELINE] fallback px-ranking ({type(e).__name__}: {e})")
+
+    # --- 2) Load ref DB once ---
     global _REF_DB
     if _REF_DB is None:
         _REF_DB = build_ref_db(REF_DIR, nfeatures=900)
 
     cents_final = []
-    debug_used = []  # optional: store info
 
     for i, c in enumerate(circles):
         label, score = match_coin_orb_area(
             img_bgr, mask_bin_255, c, _REF_DB,
             area_tol=area_tol, nfeatures=900, use_ransac=True
         )
-        mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
-        print(f"[DBG] i={i} mat={mat} match_label={label} score={score} mm_fallback={cents_mm[i]}")
 
-        # define "match success"
+        mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
+
         ok = (label is not None) and (label in LABEL_TO_CENTS) and (score is not None) and (score >= score_th)
 
         if ok:
             pred_cent = int(LABEL_TO_CENTS[label])
 
-            # Reject impossible denomination given the material (e.g., gold coin -> 5c)
-            mat = materials[i] if (materials is not None and i < len(materials)) else "unknown"
+            # material constraint gate
             valid, allowed = enforce_material_constraints(mat, pred_cent)
-
             if valid:
                 cents_final.append(pred_cent)
-                debug_used.append((i, "MATCH", label, score))
+                print(f"[DBG] i={i} mat={mat} MATCH {label} score={score}")
             else:
-                # If material constraint fails, fallback to mm-based result
-                cents_final.append(int(cents_mm[i]))
-                debug_used.append((i, "MM_FALLBACK_MAT", label, score, mat, allowed))
+                cents_final.append(int(cents_baseline[i]))
+                print(f"[DBG] i={i} mat={mat} MATCH_REJECT({pred_cent}) allowed={allowed} -> BASELINE={cents_baseline[i]}")
         else:
-            # fallback to mm-based classification
-            cents_final.append(int(cents_mm[i]))
-            debug_used.append((i, "MM_FALLBACK", label, score))
+            cents_final.append(int(cents_baseline[i]))
+            print(f"[DBG] i={i} mat={mat} NO_MATCH label={label} score={score} -> BASELINE={cents_baseline[i]}")
 
     return d_mm, cents_final, scale
 
 
 def estimate_values(method_id, img_bgr, circles, materials, mask_bin_255=None):
     """
-    0 = bimetal-mm
+    0 = bimetal-mm (fallback px-ranking if no anchor)
     1 = ratio
-    2 = CM06 matching (ORB+RANSAC) + area-scale (uses REF_DIR inside this file)
+    2 = CM06 matching (ORB+RANSAC) + fallback baseline
     """
     if method_id == 0:
         d_mm, cents, scale = estimate_values_by_bimetal_mm(img_bgr, circles, materials)
@@ -356,10 +471,8 @@ def estimate_values(method_id, img_bgr, circles, materials, mask_bin_255=None):
         return None, cents, None
 
     if method_id == 2:
-    # if user didn't pass mask, build a coarse one from circles
         if mask_bin_255 is None:
             mask_bin_255 = _auto_mask_from_circles(img_bgr.shape[:2], circles)
-
         return estimate_values_by_matching_with_fallback(
             img_bgr, circles, materials, mask_bin_255
         )
