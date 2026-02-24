@@ -34,7 +34,7 @@ CFG = {
     # 6 = Median filter on closed mask (recommended)
     # 7 = Majority filter
     # -----------------------------------------------------
-    "MORPH_METHOD_ID": 3,
+    "MORPH_METHOD_ID": 2,
 
     # -----------------------------------------------------
     # SEPARATION (for overlapping coins)
@@ -84,7 +84,7 @@ CFG = {
     "DEBUG_MODE": "save",
 
     # Output directory for saved debug images
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp8_n"),
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out_gp8_cas2"),
 
     # Image path for single-image debug
     # Used ONLY when RUN_DEBUG_SINGLE = True

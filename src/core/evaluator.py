@@ -47,7 +47,15 @@ def run_pipeline_on_image(img_path, cfg):
     debug_dump(f"04_binary_{seg_name}", binary, cfg, img_path)
 
     mask = apply_morphology(cfg["MORPH_METHOD_ID"], binary, enhanced)
-    debug_dump(f"05_mask_morph{cfg['MORPH_METHOD_ID']}", mask, cfg, img_path)
+    
+    # Adaptive fallback if mask over-segmented (mostly white, bg not detected)
+    import numpy as np
+    if np.mean(mask) > 204:  # Threshold ~80% white pixels (adjust if needed, e.g., 200-220)
+        print(f"Warning: Over-segmentation detected for {img_path}, falling back to morph=2 (open)")
+        mask = apply_morphology(2, binary, enhanced)  # Fallback to open to reduce fg
+        debug_dump("05_mask_morph_fallback2", mask, cfg, img_path)
+    else:
+        debug_dump(f"05_mask_morph{cfg['MORPH_METHOD_ID']}", mask, cfg, img_path)
 
     if cfg["SEP_METHOD_ID"] == 1:
         mask = watershed_separate(img, mask, show_debug=False, show_fit=show_fit)

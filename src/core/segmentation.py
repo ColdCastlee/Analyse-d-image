@@ -50,22 +50,20 @@ def seg_kmeans_color(img_bgr, k=2):
     
     return binary
 
-def seg_hybrid_adaptive_edge(enhanced, gray, block_size=51, C=-2, canny_low=30, canny_high=100): 
+def seg_hybrid_adaptive_edge(enhanced, gray, block_size=101, C=-5, canny_low=30, canny_high=100): 
     adaptive = cv2.adaptiveThreshold(
         enhanced, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,  # Change to BINARY for bright foreground (coins)
+        cv2.THRESH_BINARY,  # Bright fg=255
         block_size, C
     ) 
     edges = cv2.Canny(gray, canny_low, canny_high)
     kernel = np.ones((3, 3), np.uint8)
-    edges_dilated = cv2.dilate(edges, kernel, iterations=1)  # Connect coin edges
+    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
     binary = cv2.bitwise_or(adaptive, edges_dilated)
-    
-    # Optional: Close to fill small holes in coins
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-    
     return binary
+
 def apply_segmentation(method_id, img_bgr, gray, enhanced):
     if method_id == 0:
         return seg_otsu(enhanced), "otsu"
