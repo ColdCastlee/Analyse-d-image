@@ -11,13 +11,14 @@ ANN_PATH = os.path.join(ROOT_DIR, "data", "annotations.csv")
 CFG = {
     # evaluator + pure-hough thực sự dùng
     "DETECT_METHOD_ID": 2,
-    "CLASSIFY_METHOD_ID": 0,
+    "CLASSIFY_METHOD_ID": 2,
 
     # debug control
     "RUN_DEBUG_SINGLE": False,
-    "DEBUG_MODE": "none",
+    "DEBUG_MODE": "save",
     "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
-    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp1", "25.png"),
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_new_gp1_3"),
+    "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp1", "18.png"),
 }
 
 TOL_COUNT = 0
@@ -25,6 +26,7 @@ TOL_EURO = 0.10
 
 
 def main():
+    team =None
     ann = load_annotations(ANN_PATH)
 
     if CFG["RUN_DEBUG_SINGLE"]:
@@ -38,6 +40,7 @@ def main():
         return
 
     evaluate_dataset(
+        team_filter = team,
         images_dir=IMAGES_DIR,
         ann_dict=ann,
         cfg=CFG,

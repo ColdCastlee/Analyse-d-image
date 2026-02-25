@@ -82,6 +82,11 @@ def run_pipeline_on_image(img_path, cfg):
       BGR -> gray -> blur -> enhanced -> Hough
     Returns: (pred_count:int, pred_euros:float)
     """
+    # Add this to ensure directory exists early
+    if cfg["DEBUG_MODE"].lower() in ("save", "both"):
+        os.makedirs(cfg["DEBUG_OUT_DIR"], exist_ok=True)
+        print(f"[DEBUG] Created/Checked dir: {cfg['DEBUG_OUT_DIR']}")
+
     img = imread_unicode(img_path)
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
@@ -128,24 +133,33 @@ def run_pipeline_on_image(img_path, cfg):
         _, cents_list, _ = estimate_values(
             cfg["CLASSIFY_METHOD_ID"], img, circles, materials
         )
-    total_cents = int(sum(int(v) for v in cents_list))
-    total_euros = total_cents / 100.0
-    val_vis = img.copy()
-    for i, (cx, cy, r) in enumerate(circles):
-        v = int(cents_list[i]) if i < len(cents_list) else -1
-        text = f"{i}:{v}c"
-        x = int(cx - r)
-        y = int(cy + r + 30)
-        (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
-        cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
-        cv2.putText(val_vis, text, (x, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
-    total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
-    (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
-    cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
-    cv2.putText(val_vis, total_text, (20, 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
-    debug_dump("07_values", val_vis, cfg, img_path)
+    print(f"[DEBUG] cents_list len={len(cents_list)} values={cents_list}")  # Add to check
+
+    # Try-except for val_vis to catch error
+    try:
+        total_cents = int(sum(int(v) for v in cents_list))
+        total_euros = total_cents / 100.0
+        val_vis = img.copy()
+        for i, (cx, cy, r) in enumerate(circles):
+            v = int(cents_list[i]) if i < len(cents_list) else -1
+            text = f"{i}:{v}c"
+            x = int(cx - r)
+            y = int(cy + r + 30)
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+            cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
+            cv2.putText(val_vis, text, (x, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+        total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
+        (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
+        cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
+        cv2.putText(val_vis, total_text, (20, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
+        debug_dump("07_values", val_vis, cfg, img_path)
+        print(f"[DEBUG] Step 7 completed for {img_path}")
+    except Exception as e:
+        print(f"[ERROR in val_vis] {e} for {img_path}")
+        total_euros = 0.0  # Fallback
+
     return pred_count, total_euros
 
 def _safe_float(x, default=0.0):

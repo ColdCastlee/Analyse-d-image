@@ -58,81 +58,44 @@ LABEL_TO_CENTS = {
 }
 
 
+from sklearn.cluster import KMeans  # Unsupervised ML cơ bản
+
 def classify_material_adaptive(img_bgr, circles,
                                inner_ratio=0.50,
                                outer_r0=0.70,
                                outer_r1=0.95,
-                               min_pixels=50):
-    """
-    Return: list[str] in {"copper","gold","bimetal","unknown"} for each circle.
-
-    Logic:
-      - Work in LAB, use B channel.
-      - Compute:
-          diff = |median(B_outer) - median(B_inner)|
-          mean = median(B_whole_coin)
-      - Thresholds are adaptive from current image:
-          diff_th = median(diffs) + 2*std(diffs)
-          mean_th = median(means)
-      - If diff > diff_th -> bimetal
-        else -> gold if mean > mean_th else copper
-    """
-
+                               min_pixels=50,
+                               s_var_th=2500.0,  # Tuned from sim/real (adjust per step 1)
+                               h_copper_max=15.0):
     if circles is None or len(circles) == 0:
         return []
 
-    lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    HH, WW = H.shape
 
-    B = lab[..., 2].astype(np.float32)
-    A = lab[..., 1].astype(np.float32)
-    H, W = B.shape
-
-    # Pre-build grid once (faster + cleaner)
-    yy, xx = np.ogrid[:H, :W]
-
-    feats = []  # each item: (is_valid:bool, diff:float, mean:float)
-    for (cx, cy, r) in circles:
-        cx = float(cx); cy = float(cy); r = float(r)
-
-        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
-
-        inner = dist < (inner_ratio * r)
-        outer = (dist > (outer_r0 * r)) & (dist < (outer_r1 * r))
-        whole = dist < (outer_r1 * r)
-
-        if inner.sum() < min_pixels or outer.sum() < min_pixels or whole.sum() < min_pixels:
-            feats.append((False, 0.0, 0.0))
-            continue
-
-        # median is often more robust than mean (less sensitive to highlights)
-        b_inner = float(np.median(B[inner]))
-        b_outer = float(np.median(B[outer]))
-        diff = float(abs(b_outer - b_inner))
-
-        a_mean = float(np.median(A[whole]))
-        feats.append((True, diff, a_mean))
-
-    diffs = np.array([d for ok, d, m in feats if ok], dtype=np.float32)
-    means = np.array([m for ok, d, m in feats if ok], dtype=np.float32)
-
-    if diffs.size == 0:
-        return ["unknown"] * len(circles)
-
-    diff_th = float(np.median(diffs) + 2.0 * np.std(diffs))
-    diff_th = max(diff_th, 4.0)  # minimum threshold for bimetal detection
-    mean_th = float(np.median(means))
+    yy, xx = np.ogrid[:HH, :WW]
 
     materials = []
-    for ok, diff, mean in feats:
-        if not ok:
+    for i, (cx, cy, r) in enumerate(circles):
+        cx, cy, r = float(cx), float(cy), float(r)
+
+        dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        whole = dist < (outer_r1 * r)
+
+        if whole.sum() < min_pixels:
             materials.append("unknown")
-        elif diff >= diff_th:
-            materials.append("bimetal")
-        else:
-            materials.append("gold" if mean > mean_th else "copper")
+            print(f"[DBG_CLASSIFY] i={i} s_var=N/A (pixels ít) mat=unknown")
+            continue
+
+        s_var = np.var(S[whole])
+        mean_h = np.mean(H[whole])
+        mat = "bimetal" if s_var >= s_var_th else ("copper" if mean_h <= h_copper_max else "gold")
+        materials.append(mat)
+
+        print(f"[DBG_CLASSIFY] i={i} s_var={s_var:.1f} mean_h={mean_h:.1f} mat={mat}")  # Print chi tiết để tune
 
     return materials
-
 
 def bimetal_type_1e_or_2e(img_bgr, cx, cy, r_px):
     lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
@@ -395,7 +358,7 @@ def _auto_mask_from_circles(shape_hw, circles):
     return m
 
 def estimate_values_by_matching_with_fallback(img_bgr, circles, materials, mask_bin_255,
-                                              score_th=18, area_tol=0.35):
+                                              score_th=8, area_tol=0.35):
     """
     Try ORB matching per coin. If matching is unreliable -> fallback to:
       - bimetal-mm baseline (if anchor exists)
@@ -424,7 +387,7 @@ def estimate_values_by_matching_with_fallback(img_bgr, circles, materials, mask_
     # --- 2) Load ref DB once ---
     global _REF_DB
     if _REF_DB is None:
-        _REF_DB = build_ref_db(REF_DIR, nfeatures=900)
+        _REF_DB = build_ref_db(REF_DIR, nfeatures=1200)
 
     cents_final = []
 
