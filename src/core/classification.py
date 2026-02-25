@@ -615,6 +615,86 @@ def crop_coin(img_bgr: np.ndarray, circle: Circle, pad: float = 0.15) -> np.ndar
     y1 = min(int(circle.cy + r), H - 1)
     return img_bgr[y0:y1 + 1, x0:x1 + 1].copy()
 
+def _refine_radius_by_radial_edge(gray_u8: np.ndarray,
+                                  c: Circle,
+                                  search_frac: float = 0.18,
+                                  dr_step: float = 1.0,
+                                  n_angles: int = 72,
+                                  smooth_k: int = 7,
+                                  ring_w: float = 2.0) -> Circle:
+    """
+    Refine circle radius by maximizing radial edge response around the boundary.
+
+    - Sample gradient magnitude along multiple angles.
+    - Search r' in [r*(1-search_frac), r*(1+search_frac)].
+    - Pick r' with max median gradient response on a thin ring.
+
+    Works well to separate 20c vs 50c when Hough radius is a bit off.
+    """
+    H, W = gray_u8.shape[:2]
+    cx, cy, r0 = float(c.cx), float(c.cy), float(c.r)
+
+    # Gradient magnitude
+    gx = cv2.Sobel(gray_u8, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray_u8, cv2.CV_32F, 0, 1, ksize=3)
+    mag = cv2.magnitude(gx, gy)
+
+    # Candidate radii
+    r_min = max(5.0, r0 * (1.0 - search_frac))
+    r_max = min(min(H, W) * 0.9, r0 * (1.0 + search_frac))
+    rs = np.arange(r_min, r_max + 1e-6, dr_step, dtype=np.float32)
+    if rs.size < 3:
+        return c
+
+    # Angles
+    ang = np.linspace(0.0, 2.0 * np.pi, n_angles, endpoint=False).astype(np.float32)
+    cos_a = np.cos(ang); sin_a = np.sin(ang)
+
+    best_r = r0
+    best_score = -1.0
+
+    # Evaluate each radius: sample mag on ring [r-w, r+w]
+    for r in rs:
+        w = max(1.0, ring_w)
+        # sample 2 rings: r-w and r+w then average
+        scores = []
+        for rr in (r - w, r, r + w):
+            xs = cx + rr * cos_a
+            ys = cy + rr * sin_a
+            xi = np.clip(xs, 0, W - 1).astype(np.int32)
+            yi = np.clip(ys, 0, H - 1).astype(np.int32)
+            scores.append(mag[yi, xi])
+
+        s = (scores[0] + scores[1] + scores[2]) / 3.0  # (n_angles,)
+        # robust score: median to ignore a few specular/outliers
+        sc = float(np.median(s))
+        if sc > best_score:
+            best_score = sc
+            best_r = float(r)
+
+    # Small smoothing toward original (avoid over-jump)
+    new_r = 0.65 * best_r + 0.35 * r0
+    return Circle(cx=cx, cy=cy, r=float(new_r))
+
+
+def refine_circles_radii(img_bgr: np.ndarray,
+                         circles: List[Circle],
+                         use_preprocess: bool = True) -> List[Circle]:
+    """
+    Refine radii for all circles using radial edge scoring.
+    """
+    if not circles:
+        return []
+    
+    img = preprocess(img_bgr) if use_preprocess else img_bgr
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    refined = []
+    for c in circles:
+        refined.append(_refine_radius_by_radial_edge(gray, c))
+    return refined
+
 
 def classify_euro_coins(img_bgr: np.ndarray,
                         circles: Optional[List[Circle]] = None,
@@ -633,6 +713,7 @@ def classify_euro_coins(img_bgr: np.ndarray,
 
     if not circles:
         return []
+    circles = refine_circles_radii(img_bgr, circles, use_preprocess=True)
 
     materials, _dbg = classify_materials(img, circles)
 
@@ -646,6 +727,8 @@ def classify_euro_coins(img_bgr: np.ndarray,
         d_mm, cents_geom = assign_by_diameter(diam_px, materials, scale)
 
     results: List[CoinResult] = []
+    print("[SCALE]", scale, "diam_px=", diam_px.tolist(), "materials=", materials)
+
     for i, c in enumerate(circles):
         mat = materials[i] if i < len(materials) else "unknown"
 
@@ -699,7 +782,6 @@ def classify_euro_coins(img_bgr: np.ndarray,
             final_cent = geom_cent if geom_cent is not None else allowed_vals[0]
 
         final_label = COIN_SPECS[int(final_cent)]["label"]
-        print("[SCALE]", scale, "diam_px=", diam_px.tolist(), "materials=", materials)
         results.append(CoinResult(
             cents=int(final_cent),
             label=final_label,

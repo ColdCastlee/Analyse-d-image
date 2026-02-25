@@ -11,7 +11,6 @@ ANN_PATH = os.path.join(ROOT_DIR, "data", "annotations.csv")
 CFG = {
     # evaluator + pure-hough thực sự dùng
     "DETECT_METHOD_ID": 2,
-    "CLASSIFY_METHOD_ID": 2,
 
     # debug control
     "RUN_DEBUG_SINGLE": False,
