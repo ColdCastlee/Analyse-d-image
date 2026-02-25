@@ -1,233 +1,224 @@
-# Euro Coin Detection and Value Estimation
-
-## Project Overview
-
-This project implements a complete computer vision pipeline for:
-
-* detecting euro coins in images
-* separating overlapping coins
-* classifying coin types
-* estimating total monetary value
-* evaluating performance against ground truth annotations
-
-The system is based on classical image processing techniques combined with feature-based matching.
 
 ---
 
-## Processing Pipeline
+```md
+# Détection de pièces en euros et estimation de valeur
+
+## Aperçu
+
+Ce projet implémente un pipeline **100% vision classique (OpenCV)** pour :
+
+- **détecter** les pièces en euros (cercles)
+- **estimer la valeur totale** (en €) à partir des diamètres + indices couleur / matière
+- **évaluer** les résultats à l’aide d’un fichier d’annotations (`annotations.csv`)
+
+> ⚠️ Remarque : dans la version actuelle, le pipeline est volontairement **simplifié**  
+> → **pas de segmentation**, **pas de morphologie**, **pas de watershed**.
+
+---
+
+## Pipeline actuel (version code)
 
 ```
-Input image
-→ preprocessing
-→ segmentation
-→ morphological post-processing
-→ object separation
-→ coin detection
-→ coin classification and value estimation
-→ performance evaluation
+
+Image (BGR)
+→ Pré-traitement (gris + flou gaussien + CLAHE)
+→ Détection des cercles (HoughCircles “pure”)
+→ Classification des pièces (géométrie + matière + estimation d’échelle)
+→ Somme des centimes → total en euros
+→ Évaluation (MAE / RMSE / accuracy avec tolérances)
+
 ```
 
 ---
 
-## Detailed Steps
+## Détails des étapes
 
-### 1. Preprocessing
+### 1. Pré-traitement (`core/evaluator.py`)
 
-* grayscale conversion
-* noise reduction (blur)
-* optional contrast enhancement
-
-### 2. Segmentation
-
-* global Otsu thresholding (default)
-
-### 3. Morphological post-processing
-
-* closing operation
-* median filtering
-* mask cleaning and refinement
-
-### 4. Object separation
-
-* watershed algorithm for overlapping coins
-
-### 5. Coin detection
-
-* connected component analysis
-* local circle estimation (Hough-based)
-
-### 6. Classification and value estimation
-
-* ORB feature matching with reference images
-* RANSAC validation
-* fallback to real-scale estimation using bimetal coins (1€ or 2€)
-
-### 7. Evaluation
-
-* comparison with ground truth annotations
-* count accuracy
-* monetary error
-* report generation
+- conversion en niveau de gris
+- flou gaussien
+- amélioration du contraste par **CLAHE**
 
 ---
 
-## Project Structure
+### 2. Détection des pièces (`core/evaluator.py`)
+
+- détection par **`cv2.HoughCircles`**
+- **sans masque**
+- **sans composantes connexes**
+- **sans distance transform**
+
+➡️ Cette approche est volontairement simple mais **très sensible au bruit**, ce qui génère **de nombreux faux positifs (pièces fantômes)**.
+
+---
+
+### 3. Classification / estimation de valeur (`core/classification.py`)
+
+- normalisation photométrique (white balance simple + CLAHE sur L + filtre bilatéral)
+- estimation de matière (**copper / gold / bimetal / unknown**) via :
+  - statistiques robustes en espace **LAB**
+  - gestion des reflets
+  - score d’arête annulaire pour le bimétal
+- estimation de l’échelle **px/mm**
+  - priorité aux pièces bimétalliques
+  - sinon estimation robuste globale
+- attribution de la dénomination par **diamètre en mm** avec contrainte de matière souple
+- **ORB est présent dans le code**, mais **désactivé dans la configuration actuelle car il marche pas bien**
+  (`ref_db = None`)
+
+---
+
+## Performances (résultats actuels)
+
+### Configuration d’évaluation
+
+- `TOL_COUNT = 0`
+- `TOL_EURO  = 0.10 €`
+
+### Résumé global
 
 ```
+
+Images évaluées (sans exception) : 103
+Annotations manquantes           : 3
+Exceptions                       : 0
+
+Détection non vide (pred_count>0): 103 / 103
+
+```
+
+### Résultats quantitatifs
+
+#### Erreur de comptage
+
+- **MAE**  = **5.340**
+- **RMSE** = **11.865**
+- **Accuracy (|err| = 0)** = **49.5%**
+
+#### Erreur monétaire
+
+- **MAE**  = **6.453 €**
+- **RMSE** = **15.221 €**
+- **Accuracy (|err| ≤ 0.10 €)** = **8.7%**
+
+#### Cas exactement corrects
+
+- Bon nombre de pièces : **51 / 103 (49.5%)**
+- Bonne valeur (±0.10 €) : **9 / 103 (8.7%)**
+- Bon nombre **et** bonne valeur : **7 / 103 (6.8%)**
+
+---
+
+## Analyse des erreurs (important)
+
+- Les **MAE et RMSE élevés** proviennent **principalement de la sur-détection** :
+  - le détecteur Hough génère **beaucoup de cercles parasites**
+  - ces **pièces fantômes** augmentent artificiellement :
+    - le nombre de pièces détectées
+    - la valeur totale estimée
+- Même lorsque les **vraies pièces sont bien détectées**, la présence de faux positifs :
+  - dégrade fortement le comptage
+  - amplifie l’erreur monétaire (effet cumulatif)
+
+➡️ Le pipeline est donc **rappel-orienté (recall élevé)** mais avec une **précision faible**.
+
+---
+
+## Structure du projet (version actuelle)
+
+```
+
 Analyse-d-image/
 │
 ├── data/
-│   ├── images/
-│   │   ├── gp1/
-│   │   ├── gp2/
-│   │   ├── gp4/
-│   │   └── gp5/
-│   │
-│   ├── ref/                  # reference coin images
-│   ├── annotations.csv       # ground truth labels
-│
-├── debug_out/                # saved debug visualizations
-├── outputs/                  # optional outputs
+│   ├── images/               # dossiers gpX
+│   └── annotations.csv       # vérité terrain
 │
 ├── src/
 │   ├── main.py
 │   └── core/
-│       ├── preprocess.py
-│       ├── morphology.py
-│       ├── detection.py
-│       ├── classification.py
 │       ├── evaluator.py
-│       └── ...
-```
+│       ├── classification.py
+│       ├── io_utils.py
+│       └── data_loader.py
+
+````
 
 ---
 
-## Configuration
+## Exécution
 
-Pipeline parameters are defined in:
+### Évaluation sur tout le dataset
 
-```
-src/main.py → CFG dictionary
-```
+Dans `src/main.py` :
 
-### Main Parameters
+- `RUN_DEBUG_SINGLE = False`
 
-| Parameter          | Description                |
-| ------------------ | -------------------------- |
-| SEG_METHOD_ID      | segmentation method        |
-| MORPH_METHOD_ID    | mask cleaning method       |
-| SEP_METHOD_ID      | object separation method   |
-| DETECT_METHOD_ID   | geometric detection method |
-| CLASSIFY_METHOD_ID | classification strategy    |
+Puis :
 
----
+```bash
+python src/main.py
+````
 
-## Running Modes
+Sortie :
 
-The program supports two execution modes.
+* `evaluation_report.txt`
 
 ---
 
-### Single Image Debug Mode
+### Debug sur une seule image
 
-Visualizes intermediate processing stages.
+Dans `src/main.py` :
 
-Edit `src/main.py`:
+* `RUN_DEBUG_SINGLE = True`
+* `DEBUG_MODE = "show" | "save" | "both" | "none"`
+* `DEBUG_IMAGE_PATH = ...`
 
-```
-RUN_DEBUG_SINGLE = True
-DEBUG_MODE = "show" / "save" / "both"
-DEBUG_IMAGE_PATH = data/images/gp4/5.jpg
-```
+Puis :
 
-Run:
-
-```
+```bash
 python src/main.py
 ```
 
 ---
 
-### Batch Evaluation Mode (Full Dataset)
+## Configuration actuelle
 
-Processes the entire dataset and computes performance metrics.
+Dans `src/main.py` :
 
-Edit:
-
-```
-RUN_DEBUG_SINGLE = False
-```
-
-Run:
-
-```
-python src/main.py
-```
-
-Output file:
-
-```
-evaluation_report.txt
-```
-
-Metrics include:
-
-* coin count accuracy
-* monetary value error
-* MAE / RMSE
-* success rate
+* `DETECT_METHOD_ID = 2`  (Hough “pure”)
 
 ---
 
-## Classification Methods
+## Dépendances
 
-| ID | Method                                     |
-| -- | ------------------------------------------ |
-| 0  | real-scale estimation using bimetal anchor |
-| 1  | radius ratio method                        |
-| 2  | ORB feature matching with reference images |
-
----
-
-## Requirements
-
-Install dependencies:
-
-```
-pip install opencv-python numpy matplotlib pandas
+```bash
+pip install opencv-python numpy
 ```
 
 ---
 
-## Output
+## Limitations (version actuelle)
 
-The system produces:
+* **Sur-détection importante** : Hough génère de nombreux cercles non pertinents.
+* **Pièces très proches / collées** : détection instable aux bords.
+* **Sensibilité à l’éclairage extrême** malgré la normalisation.
+* **Précision monétaire faible** due à l’accumulation d’erreurs de comptage.
+* **Pas de séparation d’objets** :
 
-* detected coin count
-* predicted coin types
-* total monetary value
-* evaluation report
-
-Optional debug outputs:
-
-* segmentation masks
-* intermediate pipeline results
-* detection visualization
+  * pas de segmentation
+  * pas de watershed
+  * chevauchements difficiles à gérer
 
 ---
 
-## Limitations
+## Pistes d’amélioration
 
-* scale estimation fails if no bimetal coin is detected
-* segmentation sensitive to lighting conditions
-* overlapping coins may be over- or under-separated
-* feature matching depends on reference image quality
+* Réduction des faux positifs (filtrage géométrique / bordures / score circulaire)
+* Réintroduction d’une **segmentation légère** ou d’un **watershed avec marqueurs**
+* Sélection de **pièces de référence fiables**, puis estimation relative
+* Réactivation contrôlée du **matching ORB** pour la validation finale
 
----
+```
 
-## Future Improvements
-
-* deep learning-based segmentation
-* robust scale estimation without anchor coin
-* improved separation of touching coins
-* machine learning classification models

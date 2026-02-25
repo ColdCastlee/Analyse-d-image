@@ -3,8 +3,8 @@ import cv2
 import os
 import numpy as np
 from core.io_utils import imread_unicode, show_fit, debug_dump
-from core.classification import classify_material_adaptive, estimate_values
 from core.data_loader import iter_image_files, basename_only
+from core.classification import Circle, classify_euro_coins
 
 def mae(xs):
     return sum(abs(x) for x in xs) / max(1, len(xs))
@@ -77,68 +77,56 @@ def detect_circles_hough_pure(enhanced,
     return kept
 
 def run_pipeline_on_image(img_path, cfg):
-    """
-    PURE HOUGH pipeline:
-      BGR -> gray -> blur -> enhanced -> Hough
-    Returns: (pred_count:int, pred_euros:float)
-    """
-    # Add this to ensure directory exists early
-    if cfg["DEBUG_MODE"].lower() in ("save", "both"):
-        os.makedirs(cfg["DEBUG_OUT_DIR"], exist_ok=True)
-        print(f"[DEBUG] Created/Checked dir: {cfg['DEBUG_OUT_DIR']}")
+    debug_mode = str(cfg.get("DEBUG_MODE", "off")).lower()
+    if debug_mode in ("save", "both"):
+        out_dir = cfg.get("DEBUG_OUT_DIR", "debug_out")
+        os.makedirs(out_dir, exist_ok=True)
+        print(f"[DEBUG] Created/Checked dir: {out_dir}")
 
     img = imread_unicode(img_path)
     if img is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
+
     debug_dump("00_input", img, cfg, img_path)
+
     gray = to_gray(img)
     blur = denoise(gray, (7, 7), 0)
     enhanced = enhance_contrast(blur, clip=2.0, grid=(8, 8))
+
     circles = detect_circles_hough_pure(
-            enhanced,
-            dp=1.2,
-            min_dist_frac=0.165,
-            param1=220,
-            param2=60,
-            min_r_frac=0.04,
-            max_r_frac=0.13,
-            dedup=True
-        )
+        enhanced,
+        dp=1.2,
+        min_dist_frac=0.165,
+        param1=220,
+        param2=60,
+        min_r_frac=0.04,
+        max_r_frac=0.13,
+        dedup=True
+    )
+
     debug_dump(f"04_detect_circles_n{len(circles)}", _draw_circles(img, circles), cfg, img_path)
-    pred_count = int(len(circles))
+
+    pred_count = len(circles)
     if pred_count == 0:
         debug_dump("05_no_coins", img, cfg, img_path)
         return 0, 0.0
-    materials = classify_material_adaptive(img, circles)
-    mat_vis = img.copy()
-    for i, (cx, cy, r) in enumerate(circles):
-        m = materials[i] if i < len(materials) else "unknown"
-        cv2.putText(
-            mat_vis,
-            f"{i}:{m}",
-            (int(cx - r), int(cy - r)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA
-        )
-    debug_dump("06_materials", mat_vis, cfg, img_path)
-    if cfg["CLASSIFY_METHOD_ID"] == 2:
-        _, cents_list, _ = estimate_values(
-            cfg["CLASSIFY_METHOD_ID"], img, circles, materials,
-            mask_bin_255=None
-        )
-    else:
-        _, cents_list, _ = estimate_values(
-            cfg["CLASSIFY_METHOD_ID"], img, circles, materials
-        )
-    print(f"[DEBUG] cents_list len={len(cents_list)} values={cents_list}")  # Add to check
 
-    # Try-except for val_vis to catch error
+    # ---- classification.py integration (IMPORTANT) ----
+    circles_cls = [Circle(float(cx), float(cy), float(r)) for (cx, cy, r) in circles]
+    results = classify_euro_coins(img, circles=circles_cls, ref_db=None)
+
+    cents_list = [r.cents for r in results]
+    materials  = [r.material for r in results]
+    scale = results[0].scale_px_per_mm if results and results[0].scale_px_per_mm is not None else None
+
+    print(f"[DEBUG] scale={scale} materials={materials}")
+    print(f"[DEBUG] cents_list len={len(cents_list)} values={cents_list}")
+
+    total_cents = int(sum(int(v) for v in cents_list))
+    total_euros = total_cents / 100.0
+
+    # ---- visualization (safe) ----
     try:
-        total_cents = int(sum(int(v) for v in cents_list))
-        total_euros = total_cents / 100.0
         val_vis = img.copy()
         for i, (cx, cy, r) in enumerate(circles):
             v = int(cents_list[i]) if i < len(cents_list) else -1
@@ -149,18 +137,18 @@ def run_pipeline_on_image(img_path, cfg):
             cv2.rectangle(val_vis, (x - 6, y - h - 6), (x + w + 6, y + 6), (0, 0, 0), -1)
             cv2.putText(val_vis, text, (x, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+
         total_text = f"TOTAL: {total_euros:.2f} EUR ({total_cents}c)"
         (w, h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)
         cv2.rectangle(val_vis, (15, 15), (20 + w + 10, 50 + h), (0, 0, 0), -1)
         cv2.putText(val_vis, total_text, (20, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2, cv2.LINE_AA)
-        debug_dump("07_values", val_vis, cfg, img_path)
-        print(f"[DEBUG] Step 7 completed for {img_path}")
-    except Exception as e:
-        print(f"[ERROR in val_vis] {e} for {img_path}")
-        total_euros = 0.0  # Fallback
 
-    return pred_count, total_euros
+        debug_dump("07_values", val_vis, cfg, img_path)
+    except Exception as e:
+        print(f"[WARN] val_vis skipped: {e} for {img_path}")
+
+    return int(pred_count), float(total_euros)
 
 def _safe_float(x, default=0.0):
     try:

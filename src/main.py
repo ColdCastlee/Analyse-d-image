@@ -15,9 +15,8 @@ CFG = {
 
     # debug control
     "RUN_DEBUG_SINGLE": False,
-    "DEBUG_MODE": "save",
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_out"),
-    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_new_gp1_3"),
+    "DEBUG_MODE": "none",
+    "DEBUG_OUT_DIR": os.path.join(ROOT_DIR, "debug_new_gp1_7"),
     "DEBUG_IMAGE_PATH": os.path.join(IMAGES_DIR, "gp1", "18.png"),
 }
 
@@ -26,7 +25,7 @@ TOL_EURO = 0.10
 
 
 def main():
-    team =None
+    team = None
     ann = load_annotations(ANN_PATH)
 
     if CFG["RUN_DEBUG_SINGLE"]:
@@ -48,9 +47,6 @@ def main():
         tol_euro=TOL_EURO,
         report_path=os.path.join(ROOT_DIR, "evaluation_report.txt"),
     )
-    print("[CFG]", {k: CFG[k] for k in
-                    ["SEG_METHOD_ID", "MORPH_METHOD_ID", "SEP_METHOD_ID", "DETECT_METHOD_ID", "CLASSIFY_METHOD_ID",
-                     "RUN_DEBUG_SINGLE", "DEBUG_MODE"]}),
 
 
 if __name__ == "__main__":
