@@ -1,233 +1,175 @@
-# Euro Coin Detection and Value Estimation
+#  Système de Détection et d'Estimation de Valeur de Pièces
 
-## Project Overview
+## 📌 Présentation du projet
 
-This project implements a complete computer vision pipeline for:
+Ce projet implémente une chaîne complète de **vision par ordinateur**
+permettant :
 
-* detecting euro coins in images
-* separating overlapping coins
-* classifying coin types
-* estimating total monetary value
-* evaluating performance against ground truth annotations
+-    la détection automatique de pièces dans une image\
+-    la classification de leur matériau (cuivre, or, bimétallique)\
+-    l'estimation de leur valeur monétaire totale\
+-    l'évaluation quantitative sur un jeu de données annoté
 
-The system is based on classical image processing techniques combined with feature-based matching.
+Le système constitue un **framework d'évaluation complet** avec
+génération automatique de rapports et métriques de performance.
 
----
+------------------------------------------------------------------------
 
-## Processing Pipeline
+## ⚙️ Pipeline de traitement
 
-```
-Input image
-→ preprocessing
-→ segmentation
-→ morphological post-processing
-→ object separation
-→ coin detection
-→ coin classification and value estimation
-→ performance evaluation
-```
+Pour chaque image :
 
----
+1.  Lecture de l'image (gestion Unicode compatible Windows)
+2.  Conversion en niveaux de gris
+3.  Réduction du bruit (filtrage gaussien)
+4.  Amélioration du contraste (CLAHE)
+5.  Détection des cercles (Transformée de Hough)
+6.  Classification du matériau (analyse colorimétrique LAB)
+7.  Estimation de la dénomination de chaque pièce
+8.  Calcul de la valeur totale
+9.  Comparaison avec la vérité terrain
 
-## Detailed Steps
+------------------------------------------------------------------------
 
-### 1. Preprocessing
+##  Méthodes d'estimation des valeurs
 
-* grayscale conversion
-* noise reduction (blur)
-* optional contrast enhancement
+Le système propose trois stratégies différentes.
 
-### 2. Segmentation
+### 🔹 Méthode 0 --- Baseline métrique basée sur le diamètre réel
 
-* global Otsu thresholding (default)
+-   Estimation du facteur d'échelle pixel → millimètre
+-   Comparaison avec les diamètres officiels des pièces
+-   Contraintes souples selon le matériau détecté
 
-### 3. Morphological post-processing
+✔ Robuste\
+✔ Complètement automatique\
+✔ Ne nécessite pas d'images de référence
 
-* closing operation
-* median filtering
-* mask cleaning and refinement
+------------------------------------------------------------------------
 
-### 4. Object separation
+### 🔹 Méthode 1 --- Estimation par ratio de rayon
 
-* watershed algorithm for overlapping coins
+-   Normalisation par la plus grande pièce détectée
+-   Comparaison avec des ratios relatifs connus
 
-### 5. Coin detection
+✔ Simple et rapide\
+⚠ Sensible aux erreurs de détection
 
-* connected component analysis
-* local circle estimation (Hough-based)
+------------------------------------------------------------------------
 
-### 6. Classification and value estimation
+### 🔹 Méthode 2 --- Matching ORB avec vérification géométrique (CM06)
 
-* ORB feature matching with reference images
-* RANSAC validation
-* fallback to real-scale estimation using bimetal coins (1€ or 2€)
+-   Filtrage des candidats par aire
+-   Alignement d'échelle
+-   Extraction de descripteurs ORB
+-   Vérification géométrique par RANSAC
+-   Fallback automatique vers la baseline si le matching est incertain
 
-### 7. Evaluation
+✔ Haute précision si les références sont fiables\
+✔ Robuste grâce au fallback
 
-* comparison with ground truth annotations
-* count accuracy
-* monetary error
-* report generation
+------------------------------------------------------------------------
 
----
+##  Structure du projet
 
-## Project Structure
+    src/
+    │
+    ├── main.py
+    │
+    ├── core/
+    │   ├── data_loader.py
+    │   ├── evaluator.py
+    │   ├── classification.py
+    │   ├── matching.py
+    │   └── io_utils.py
+    │
+    data/
+    ├── images/
+    ├── ref/
+    └── annotations.csv
 
-```
-Analyse-d-image/
-│
-├── data/
-│   ├── images/
-│   │   ├── gp1/
-│   │   ├── gp2/
-│   │   ├── gp4/
-│   │   └── gp5/
-│   │
-│   ├── ref/                  # reference coin images
-│   ├── annotations.csv       # ground truth labels
-│
-├── debug_out/                # saved debug visualizations
-├── outputs/                  # optional outputs
-│
-├── src/
-│   ├── main.py
-│   └── core/
-│       ├── preprocess.py
-│       ├── morphology.py
-│       ├── detection.py
-│       ├── classification.py
-│       ├── evaluator.py
-│       └── ...
-```
+------------------------------------------------------------------------
 
----
+##  Configuration
 
-## Configuration
+Les paramètres principaux sont définis dans `src/main.py`.
 
-Pipeline parameters are defined in:
+### Exemple :
 
-```
-src/main.py → CFG dictionary
+``` python
+CFG = {
+    "DETECT_METHOD_ID": 2,
+    "CLASSIFY_METHOD_ID": 0,
+    "RUN_DEBUG_SINGLE": False,
+    "DEBUG_MODE": "none",
+    "DEBUG_OUT_DIR": "debug_out",
+    "DEBUG_IMAGE_PATH": ".../gp1/25.png"
+}
 ```
 
-### Main Parameters
+### Modes Debug
 
-| Parameter          | Description                |
-| ------------------ | -------------------------- |
-| SEG_METHOD_ID      | segmentation method        |
-| MORPH_METHOD_ID    | mask cleaning method       |
-| SEP_METHOD_ID      | object separation method   |
-| DETECT_METHOD_ID   | geometric detection method |
-| CLASSIFY_METHOD_ID | classification strategy    |
+  Mode   Description
+  ------ -------------------------------------
+  none   Aucun affichage ni sauvegarde
+  show   Affichage des étapes intermédiaires
+  save   Sauvegarde des images debug
+  both   Affichage + sauvegarde
 
----
+------------------------------------------------------------------------
 
-## Running Modes
+## ▶ Exécution
 
-The program supports two execution modes.
+### Évaluation du dataset complet
 
----
-
-### Single Image Debug Mode
-
-Visualizes intermediate processing stages.
-
-Edit `src/main.py`:
-
-```
-RUN_DEBUG_SINGLE = True
-DEBUG_MODE = "show" / "save" / "both"
-DEBUG_IMAGE_PATH = data/images/gp4/5.jpg
-```
-
-Run:
-
-```
+``` bash
 python src/main.py
 ```
 
----
-
-### Batch Evaluation Mode (Full Dataset)
-
-Processes the entire dataset and computes performance metrics.
-
-Edit:
-
-```
-RUN_DEBUG_SINGLE = False
-```
-
-Run:
-
-```
-python src/main.py
-```
-
-Output file:
-
-```
+Sorties : - Résumé dans la console - Rapport détaillé :
 evaluation_report.txt
+
+------------------------------------------------------------------------
+
+### Débogage d'une image unique
+
+Dans `main.py` :
+
+``` python
+RUN_DEBUG_SINGLE = True
+DEBUG_MODE = "both"
 ```
 
-Metrics include:
+------------------------------------------------------------------------
 
-* coin count accuracy
-* monetary value error
-* MAE / RMSE
-* success rate
+##  Métriques d'évaluation
 
----
+Le système calcule automatiquement :
 
-## Classification Methods
+-   MAE
+-   RMSE
+-   Précision sous tolérance
+-   Taux de détection
+-   Cas d'erreurs détaillés
+-   Images sans annotation
+-   Exceptions
 
-| ID | Method                                     |
-| -- | ------------------------------------------ |
-| 0  | real-scale estimation using bimetal anchor |
-| 1  | radius ratio method                        |
-| 2  | ORB feature matching with reference images |
+Résultats exportés dans :
 
----
+    evaluation_report.txt
 
-## Requirements
+------------------------------------------------------------------------
 
-Install dependencies:
+##  Dépendances
 
-```
-pip install opencv-python numpy matplotlib pandas
-```
+Python ≥ 3.9
 
----
+    pip install -r requirements.txt
 
-## Output
+------------------------------------------------------------------------
 
-The system produces:
+##  Auteur
 
-* detected coin count
-* predicted coin types
-* total monetary value
-* evaluation report
+Projet développé dans le cadre d'expérimentations en vision par
+ordinateur.
 
-Optional debug outputs:
-
-* segmentation masks
-* intermediate pipeline results
-* detection visualization
-
----
-
-## Limitations
-
-* scale estimation fails if no bimetal coin is detected
-* segmentation sensitive to lighting conditions
-* overlapping coins may be over- or under-separated
-* feature matching depends on reference image quality
-
----
-
-## Future Improvements
-
-* deep learning-based segmentation
-* robust scale estimation without anchor coin
-* improved separation of touching coins
-* machine learning classification models

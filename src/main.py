@@ -65,9 +65,10 @@ def main():
         tol_euro=TOL_EURO,
         report_path=os.path.join(ROOT_DIR, "evaluation_report.txt"),
     )
-    print("[CFG]", {k: CFG[k] for k in
-                    ["SEG_METHOD_ID", "MORPH_METHOD_ID", "SEP_METHOD_ID", "DETECT_METHOD_ID", "CLASSIFY_METHOD_ID",
-                     "RUN_DEBUG_SINGLE", "DEBUG_MODE"]}),
+    print("[CFG]", {k: CFG.get(k) for k in
+                    ["SEG_METHOD_ID", "MORPH_METHOD_ID", "SEP_METHOD_ID",
+                     "DETECT_METHOD_ID", "CLASSIFY_METHOD_ID",
+                     "RUN_DEBUG_SINGLE", "DEBUG_MODE"]})
 
 
 if __name__ == "__main__":

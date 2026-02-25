@@ -242,17 +242,16 @@ def match_coin_orb_area(img_bgr, mask_bin_255, circle, ref_db,
         if area_r < 200:
             continue
 
-        # Estimate scale to align areas: area ~ s^2 → s = sqrt(area_r / area_q)
+        # --- area filtering BEFORE scale (more meaningful) ---
+        area_ratio0 = area_q / float(area_r)
+        if abs(area_ratio0 - 1.0) > area_tol:
+            continue
+
+        # now compute scale to align areas
         s = float(np.sqrt(area_r / max(area_q, 1)))
 
         # If scale too extreme, skip early (stability)
         if s < 0.5 or s > 2.0:
-            continue
-
-        # Area-based filtering AFTER scale: scaled query area ~ area_q * s^2 ≈ area_r
-        # Here we just enforce s not too far already; plus tolerance by ratio
-        ratio = (area_q * (s ** 2)) / float(area_r)
-        if abs(ratio - 1.0) > area_tol:
             continue
 
         # Resize query to ref-ish scale for better matching
